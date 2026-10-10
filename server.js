@@ -1,3 +1,4 @@
+// This is server file, use 'npm run dev' in the powershell to run the server
 import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
