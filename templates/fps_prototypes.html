@@ -28,7 +28,7 @@ canvas{display:block}
 .rg i{position:absolute;left:0;right:0;top:0;line-height:64px;font-style:normal;font-size:14px}.rg span{position:absolute;left:0;right:0;top:66px;font-size:11px;opacity:.85}
 #flash{position:fixed;inset:0;background:#f00;opacity:0;pointer-events:none;transition:opacity .25s}
 </style></head><body>
-<div id="ov"><b>FPS PROTOTYPE</b>Click to play<small>WASD move · Mouse look · Shift dash · F interact · 1/2/3 or Q swap · R reload<br>Left click: attack/block/charge · Right click: switch weapon mode</small><div id="sens" onclick="event.stopPropagation()">Sensitivity <input type="range" id="sv" min="0.2" max="3" step="0.05" value="1"> <b id="svv">1.00</b></div></div>
+<div id="ov"><b>FPS PROTOTYPE</b><span id="play-status">Preparing scene...</span><small>WASD move · Mouse look · Shift dash · F interact · 1/2/3 or Q swap · R reload<br>Left click: attack/block/charge · Right click: switch weapon mode</small><div id="sens" onclick="event.stopPropagation()">Sensitivity <input type="range" id="sv" min="0.2" max="3" step="0.05" value="1"> <b id="svv">1.00</b></div></div>
 <div id="star">✸</div><div id="cross"></div><div id="scope"><div id="sg"><i></i></div></div><div id="prompt">Press F to absorb orb</div><div id="toast"></div><div id="flash"></div>
 <svg id="rr" width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="22" fill="none" stroke="#fff4" stroke-width="3"/><circle id="rrp" cx="28" cy="28" r="22" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="138.23" stroke-dashoffset="138.23" transform="rotate(-90 28 28)"/></svg>
 <div id="rings"><div class="rg"><svg width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="none" stroke="#fff3" stroke-width="5"/><circle id="rb" cx="32" cy="32" r="26" fill="none" stroke-width="5" stroke-linecap="round" stroke-dasharray="163.36" stroke-dashoffset="0" transform="rotate(-90 32 32)"/></svg><i id="rbt"></i><span>BLOCK</span></div>
@@ -36,11 +36,28 @@ canvas{display:block}
 <div id="hud"><div class="bar" id="hp"><i></i><span></span></div><div id="dash"><div><i></i></div><div><i></i></div><div><i></i></div></div></div>
 <div class="bar" id="cb"><i></i><span></span></div>
 <div id="ammo"><span id="wn"></span><small id="wm"></small></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
+
+<!--Here I will add some import from Three.js lib packagges -JakePhillip  -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/three.module.js",
+    "three/addons/": "/vendor/three/addons/",
+    "three-mesh-bvh": "/vendor/three-mesh-bvh/index.module.js"
+  }
+}
+</script>
+
+
+<script type="module">
+import * as THREE from "three";
+import { loadModels } from "/src/load_model.js";
+import { ModelCollisionWorld } from "/src/model_collision.js";
+
 const $=id=>document.getElementById(id);
 // ---------- scene ----------
 const S=new THREE.Scene();S.background=new THREE.Color(0x1a2030);S.fog=new THREE.Fog(0x1a2030,25,90);
+const collisionWorld=new ModelCollisionWorld();
 const cam=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.05,200);S.add(cam);
 const R=new THREE.WebGLRenderer({antialias:true});R.setSize(innerWidth,innerHeight);document.body.appendChild(R.domElement);
 addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
@@ -145,11 +162,11 @@ function fwd(){return new THREE.Vector3(-Math.sin(P.yaw),0,-Math.cos(P.yaw))}
 function reload(){if(W.cur==2&&W.rReload<=0&&W.rAmmo<35&&!W.swap){W.rReload=2;W.scope=false;W.scopeCharge=0;toast('Reloading...')}if(W.cur==0&&W.reload<=0&&W.ammo<12){W.reload=1;toast('Reloading...')}}
 function swapTo(i){if(W.cur==i||W.swap)return;W.swap=1;W.target=i;W.blocking=false;W.charging=false;W.down=false;W.scope=false;W.scopeCharge=0;if(W.reload>0||W.rReload>0)toast('Reload cancelled');W.reload=0;W.rReload=0}
 // ---------- input ----------
-let locked=false,SENS=1;
+let locked=false,SENS=1,modelReady=false,modelFailed=false;
 try{SENS=+localStorage.getItem('sens')||1}catch(e){}
 const sv=$('sv');sv.value=SENS;$('svv').textContent=SENS.toFixed(2);
 sv.oninput=()=>{SENS=+sv.value;$('svv').textContent=SENS.toFixed(2);try{localStorage.setItem('sens',SENS)}catch(e){}};
-$('ov').onclick=()=>R.domElement.requestPointerLock();
+$('ov').onclick=()=>{if(modelReady)R.domElement.requestPointerLock();else if(modelFailed)location.reload()};
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===R.domElement;$('ov').style.display=locked?'none':'flex'});
 addEventListener('mousemove',e=>{if(!locked)return;P.yaw-=e.movementX*.0022*SENS*cam.fov/75;P.pitch=Math.max(-1.45,Math.min(1.45,P.pitch-e.movementY*.0022*SENS*cam.fov/75))});
 addEventListener('contextmenu',e=>e.preventDefault());
@@ -174,9 +191,9 @@ function update(dt){
   if(P.deadT>=2.5){P.dead=false;P.hp=200;P.pos.set(0,0,8);P.roll=0;P.eyeY=1.7;$('flash').style.opacity=0;toast('Respawned')}}
  // movement
  let sp=PS*(W.charging?.3:1)*(W.cur==2&&W.scope?.5:1);const d=inDir();
- P.pos.addScaledVector(d,sp*dt);
+ collisionWorld.move(P.pos,d.clone().multiplyScalar(sp*dt));
  const mv=d.lengthSq()>0&&P.dashT<=0;bobA+=((mv?1:0)-bobA)*Math.min(1,dt*10);if(mv)bobT+=dt*10*(sp/PS);
- if(P.dashT>0){const s=Math.min(dt,P.dashT);P.pos.addScaledVector(P.dashDir,5/.12*s);P.dashT-=s}
+ if(P.dashT>0){const s=Math.min(dt,P.dashT);collisionWorld.move(P.pos,P.dashDir.clone().multiplyScalar(5/.12*s));P.dashT-=s}
  P.pos.x=Math.max(-48,Math.min(48,P.pos.x));P.pos.z=Math.max(-48,Math.min(48,P.pos.z));collide(P.pos);
  if(P.dash<3){P.dashTimer+=dt;if(P.dashTimer>=2.5){P.dash++;P.dashTimer=0}}
  if(W.cur==2&&W.scope)W.scopeCharge=Math.min(2,W.scopeCharge+dt)
@@ -262,4 +279,17 @@ function hud(){hudRings();const pf=W.cur==1&&W.charging&&W.chargeT>=3&&W.chargeT
 let bobT=0,bobA=0;let last=performance.now();
 (function loop(t){const dt=Math.min((t-last)/1000,.05);last=t;if(locked)update(dt);R.render(S,cam);requestAnimationFrame(loop)})(last);
 hud();$('wn').textContent='Handgun : 12/12';
+async function loadSceneModels(){
+ try{
+  await loadModels(S,collisionWorld);
+  modelReady=true;
+  $('play-status').textContent='Click to play';
+ }catch(error){
+  console.error('Could not load the scene model:',error);
+  modelFailed=true;
+  $('play-status').textContent='Model failed to load. Click to retry.';
+ }
+}
+
+loadSceneModels();
 </script></body></html>

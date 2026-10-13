@@ -25,8 +25,8 @@ pageRouter.get("/", (req, res) => {
     res.sendFile(path.join(templateDir, "TitlePage.html"));
 });
 
-pageRouter.get("/fps-prototype", (req, res) => {
-    res.sendFile(path.join(templateDir, "fps_prototype.html"));
+pageRouter.get("/fps-prototypes", (req, res) => {
+    res.sendFile(path.join(templateDir, "fps_prototypes.html"));
 });
 
 app.use("/", pageRouter);
