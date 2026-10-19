@@ -61,6 +61,18 @@
       text-align: left
     }
 
+    #loadout {
+      display: grid;
+      grid-template-columns: auto minmax(180px, 1fr);
+      align-items: center;
+      gap: 8px 12px;
+      text-align: left
+    }
+
+    #loadout label {
+      display: contents
+    }
+
     #menuPanel select,
     #menuPanel button {
       min-width: 220px;
@@ -80,6 +92,15 @@
 
     #menuPanel button:hover {
       background: #3489bf
+    }
+
+    #quitButton {
+      display: none;
+      background: #803b3b !important
+    }
+
+    #quitButton:hover {
+      background: #a34b4b !important
     }
 
     #levelName {
@@ -366,10 +387,32 @@
       <label for="levelSelect">Select level
         <select id="levelSelect"><option value="testing">0.1 testing</option></select>
       </label>
+      <div id="loadout" aria-label="Weapon loadout">
+        <label for="handgunLoadout">Handgun
+          <select id="handgunLoadout">
+            <option value="buckshot">Buckshot</option>
+            <option value="evolve">Evolve</option>
+          </select>
+        </label>
+        <label for="swordLoadout">Sword
+          <select id="swordLoadout">
+            <option value="guard">Guard</option>
+            <option value="perfectParry">Perfect Parry</option>
+          </select>
+        </label>
+        <label for="rifleLoadout">Rifle
+          <select id="rifleLoadout">
+            <option value="chargedShot">Charged Shot</option>
+            <option value="poisonShot">Poison Shot</option>
+          </select>
+        </label>
+      </div>
       <button id="startButton" type="button">Start Game</button>
+      <button id="quitButton" type="button">Quit to Main Menu</button>
       <small>WASD move · Mouse look · Shift dash · F interact · 1/2/3 or Q swap · R reload<br>
-        Sword: click to slash · hold left click to charge a wave · right click to block<br>
-        Right click uses each weapon's alternate action</small>
+        Sword: click to slash · hold left click to charge a wave · right click uses equipped skill<br>
+        Evolve: 10 base damage, +2 per hit · Perfect Parry: 5-frame window, 15s cooldown<br>
+        Poison Shot: 15 rounds, 6 damage · 2 poison damage/stack/s · 50% chance · max stacks deal instant damage</small>
       <div id="sens" onclick="event.stopPropagation()">Sensitivity <input type="range" id="sv" min="0.2" max="3"
           step="0.05" value="1"> <b id="svv">1.00</b></div>
     </div>
@@ -397,7 +440,7 @@
         <circle cx="32" cy="32" r="26" fill="none" stroke="#fff3" stroke-width="5" />
         <circle id="rb" cx="32" cy="32" r="26" fill="none" stroke-width="5" stroke-linecap="round"
           stroke-dasharray="163.36" stroke-dashoffset="0" transform="rotate(-90 32 32)" />
-      </svg><i id="rbt"></i><span>BLOCK</span></div>
+      </svg><i id="rbt"></i><span>GUARD</span></div>
     <div class="rg"><svg width="64" height="64" viewBox="0 0 64 64">
         <circle cx="32" cy="32" r="26" fill="none" stroke="#fff3" stroke-width="5" />
         <circle id="rw" cx="32" cy="32" r="26" fill="none" stroke-width="5" stroke-linecap="round"
@@ -446,12 +489,12 @@
       m.add(body, head);
       const bar = new THREE.Mesh(new THREE.PlaneGeometry(1.2, .12).translate(.6, 0, 0), new THREE.MeshBasicMaterial({ color: 0x33ff55 })); bar.position.set(-.6, 2.5, 0); g.add(bar);
       g.position.set(x, 0, z); S.add(g);
-      const e = { g, m, type, hp: 100, max: 100, alive: true, rt: 0, cd: 1, home: new THREE.Vector3(x, 0, z), bar, body, head, dir: 1, dt: 0 };
+      const e = { g, m, type, hp: 100, max: 100, alive: true, rt: 0, cd: 1, home: new THREE.Vector3(x, 0, z), bar, body, head, dir: 1, dt: 0, poisonStacks: 0, poisonT: 0, poisonTick: 0 };
       body.userData.e = e; head.userData.e = e; head.userData.head = true; targets.push(body, head); enemies.push(e); return e
     }
     mkEnemy(1, -6, -16); mkEnemy(2, 10, -18);
-    function hitEnemy(e, dmg, head) {
-      if (!e.alive) return; { const n = performance.now(); if (n - W.regT > 60 && W.blockCD <= 0) { W.regT = n; W.blockHP = Math.min(40, W.blockHP + 5) } } if (head) dmg *= 1.3; e.hp -= dmg;
+    function hitEnemy(e, dmg, head, source) {
+      if (!e.alive) return; if (source != 'poison') { const n = performance.now(); if (n - W.regT > 60 && W.blockCD <= 0) { W.regT = n; W.blockHP = Math.min(40, W.blockHP + 5) } } if (head) dmg *= 1.3; e.hp -= dmg;
       const c = $('cross'); c.style.borderColor = head ? '#ff0' : '#f33'; setTimeout(() => c.style.borderColor = '#fff', 100);
       if (e.hp <= 0) { e.hp = 0; e.alive = false; e.g.visible = false; e.rt = e.type == 3 ? 15 : 5; if (e.type == 3) bossClear(e) }
       e.bar.scale.x = Math.max(e.hp / e.max, .001)
@@ -459,16 +502,44 @@
     const eProj = [];
     // ---------- hurt ----------
     const W = {
-      cur: 0, waveCD: 0, rAmmo: 35, rReload: 0, scope: false, scopeCharge: 0, ammo: 12, cdT: 0, reload: 0, swap: 0, wOff: 0, target: 0, swing: 0,
-      blocking: false, blockHP: 40, regT: 0, swingV: 1, ck: 0, blockCD: 0, holdT: 0, down: false, charging: false, chargeT: 0, chargeReady: false, chargeChecked: false, activeAlt: null
+      cur: 0, waveCD: 0, rAmmo: 35, rReload: 0, scope: false, scopeCharge: 0, poisonBurst: 0, poisonBurstT: 0,
+      ammo: 12, cdT: 0, reload: 0, swap: 0, wOff: 0, target: 0, swing: 0,
+      blocking: false, blockHP: 40, regT: 0, swingV: 1, ck: 0, blockCD: 0, parryCD: 0, parryFrames: 0, parryWaveReady: false,
+      evolveBonus: 0, holdT: 0, down: false, charging: false, chargeT: 0, chargeReady: false, chargeChecked: false, activeAlt: null
     };
     function hurt(d) {
       if (P.dead) return;
-      if (W.cur == 1 && W.blocking) { const a = Math.min(d, W.blockHP); W.blockHP -= a; d -= a; if (W.blockHP <= 0) { W.blocking = false; W.blockCD = 8; toast('Block broken! 8s cooldown') } }
-      if (W.charging) d *= .9; if (d <= 0) return; P.hp -= d; const f = $('flash'); f.style.opacity = .5; setTimeout(() => f.style.opacity = 0, 120);
+      if (W.cur == 1 && WEAPON_ALTERNATES.sword == 'perfectParry' && W.parryFrames > 0) {
+        W.parryFrames = 0; W.parryCD = 0; W.parryWaveReady = true; toast('Perfect parry! Next slash fires a wave'); return
+      }
+      if (W.cur == 1 && W.blocking) { const a = Math.min(d, W.blockHP); W.blockHP -= a; d -= a; if (W.blockHP <= 0) { W.blocking = false; W.blockCD = 8; toast('Guard broken! 8s cooldown') } }
+      if (W.charging) d *= .9; if (d <= 0) return;
+      if (WEAPON_ALTERNATES.handgun == 'evolve') W.evolveBonus = 0;
+      P.hp -= d; const f = $('flash'); f.style.opacity = .5; setTimeout(() => f.style.opacity = 0, 120);
       if (P.hp <= 0) { P.hp = 0; P.dead = true; P.deadT = 0; W.down = false; W.charging = false; W.blocking = false; W.scope = false; toast('You were defeated') }
     }
     let tt; function toast(s) { const t = $('toast'); t.textContent = s; t.style.opacity = 1; clearTimeout(tt); tt = setTimeout(() => t.style.opacity = 0, 1600) }
+    const POISON_DAMAGE_PER_STACK = 2, POISON_PROC_CHANCE = .5;
+    function applyPoison(e, stacks, duration) {
+      if (!e.alive) return;
+      if (e.poisonStacks >= 10) hitEnemy(e, POISON_DAMAGE_PER_STACK * e.poisonStacks * .5, false, 'poison');
+      else e.poisonStacks = Math.min(10, e.poisonStacks + stacks);
+      if (e.alive) {
+        e.poisonT = duration; e.bar.material.color.setHex(0x44ff88)
+      }
+    }
+    function updatePoison(e, dt) {
+      if (e.poisonT <= 0) return;
+      const activeDt = Math.min(dt, e.poisonT);
+      e.poisonT -= activeDt; e.poisonTick += activeDt;
+      while (e.poisonTick >= .5 && e.alive) {
+        e.poisonTick -= .5;
+        hitEnemy(e, e.poisonStacks * POISON_DAMAGE_PER_STACK * .5, false, 'poison')
+      }
+      if (e.poisonT == 0 || !e.alive) {
+        e.poisonStacks = 0; e.poisonTick = 0; e.bar.material.color.setHex(0x33ff55)
+      }
+    }
     // ---------- weapon models ----------
     const mat = c => new THREE.MeshLambertMaterial({ color: c });
     const gun = new THREE.Group(); gun.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(.07, .1, .32), mat(0x333333))));
@@ -505,17 +576,36 @@
       const m = new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, 1, 5), new THREE.MeshBasicMaterial({ color: 0xffee88, transparent: true, opacity: .9 }));
       m.scale.y = len; m.position.copy(_a).addScaledVector(dir, len / 2); m.quaternion.setFromUnitVectors(Y, dir); S.add(m); tracers.push({ m, t: .15 })
     }
-    function shoot(spread, dmg = 15) {
+    function shoot(spread, dmg = 15, onHit) {
       ray.setFromCamera({ x: (Math.random() - .5) * spread, y: (Math.random() - .5) * spread }, cam);
       const act = targets.filter(m => m.userData.e.alive); const h = ray.intersectObjects(act.concat(obsM), false)[0];
       tracer(h ? h.point : ray.ray.at(80, new THREE.Vector3()));
-      if (h && h.object.userData.e) hitEnemy(h.object.userData.e, dmg, !!h.object.userData.head)
+      if (h && h.object.userData.e) {
+        const e = h.object.userData.e, weakspot = !!h.object.userData.head;
+        hitEnemy(e, dmg, weakspot);
+        if (onHit) onHit(e, weakspot)
+      }
+      return h && h.object.userData.e ? h.object.userData.e : null
     }
     function fireGun(buckshot = false) {
       if (W.cdT > 0 || W.reload > 0 || W.ammo <= 0) return;
       if (buckshot) { const n = Math.min(6, W.ammo); for (let i = 0; i < n; i++)shoot(.18); W.ammo -= n; W.cdT = .6; kick = 3.6 }
-      else { shoot(0); W.ammo--; W.cdT = .25; kick = 1 }
+      else {
+        const evolve = WEAPON_ALTERNATES.handgun == 'evolve', dmg = evolve ? 10 + W.evolveBonus : 15;
+        const hit = shoot(0, dmg);
+        if (evolve && hit) W.evolveBonus += 2;
+        W.ammo--; W.cdT = .25; kick = 1
+      }
       fT = .06; flash.visible = true; fl.intensity = 3; if (W.ammo == 0) toast('Empty - press R')
+    }
+    function firePoisonBullet() {
+      if (W.rAmmo <= 0 || W.rReload > 0) { W.poisonBurst = 0; return }
+      shoot(.02, 6, (e, weakspot) => {
+        if (Math.random() < POISON_PROC_CHANCE) applyPoison(e, weakspot ? 2 : 1, weakspot ? 5 : 3)
+        else if (e.poisonStacks >= 10) hitEnemy(e, POISON_DAMAGE_PER_STACK * e.poisonStacks * .5, false, 'poison')
+      });
+      W.rAmmo--; kick = .5; fT = .05; rflash.visible = true; rfl.intensity = 3;
+      if (W.rAmmo == 0) toast('Empty - press R')
     }
     function fireRifle() {
       if (W.cdT > 0 || W.rReload > 0 || W.rAmmo <= 0) return; let cost = 1;
@@ -523,7 +613,11 @@
         if (W.rAmmo < 7) { toast('Sniper needs 7 bullets - reload (R) or right click for auto'); W.cdT = .6; return }
         cost = 7; const full = W.scopeCharge >= 2; shoot(0, full ? 50 : 20); W.cdT = 1; kick = 2.2; W.ck = .07; W.scopeCharge = 0; if (full) toast('Charged shot!')
       }
-      else { shoot(.02, 9); W.cdT = 1 / 9; kick = .5 }
+      else {
+        const poison = WEAPON_ALTERNATES.rifle == 'poisonShot';
+        if (poison) { firePoisonBullet(); W.cdT = 1 / 9; return }
+        shoot(.02, 9); W.cdT = 1 / 9; kick = .5
+      }
       W.rAmmo -= cost; fT = .05; rflash.visible = true; rfl.intensity = 3; if (W.rAmmo == 0) toast('Empty - press R')
     }
     const SWR = 4, slashes = [];
@@ -540,28 +634,54 @@
       }
     }
     const waves = [];
-    function fireWave() {
-      const perfect = W.chargeT >= 3 && W.chargeT <= 3.2; const f = fwd();
+    function fireWave(instant = false) {
+      const perfect = instant || W.chargeT >= 3 && W.chargeT <= 3.2; const f = fwd();
       const g = new THREE.Group(), c = new THREE.Mesh(new THREE.TorusGeometry(1, .07, 6, 20, Math.PI), new THREE.MeshBasicMaterial({ color: perfect ? 0xffdd00 : 0xffffff }));
       c.rotation.x = -Math.PI / 2; g.add(c); g.rotation.y = P.yaw; if (perfect) g.scale.set(1.4, 1, 1.4); g.position.set(P.pos.x + f.x, 1.1, P.pos.z + f.z); S.add(g);
       waves.push({ g, v: f.clone().multiplyScalar(PS * 1.3 * (perfect ? 1.4 : 1)), dmg: perfect ? 42 : 30, life: 0, hit: new Set(), hr: perfect ? 2.24 : 1.6 })
     }
     function fwd() { return new THREE.Vector3(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)) }
-    function reload() { if (W.cur == 2 && W.rReload <= 0 && W.rAmmo < 35 && !W.swap) { W.rReload = 2.7; W.scope = false; W.scopeCharge = 0; toast('Reloading...') } if (W.cur == 0 && W.reload <= 0 && W.ammo < 12) { W.reload = 1.6; toast('Reloading...') } }
-    const WEAPON_ALTERNATES = { handgun: 'buckshot', sword: 'block', rifle: 'scopeShot' };
+    function rifleAmmoCapacity() { return WEAPON_ALTERNATES.rifle == 'poisonShot' ? 15 : 35 }
+    function reload() { if (W.cur == 2 && W.rReload <= 0 && W.rAmmo < rifleAmmoCapacity() && !W.swap) { W.rReload = 2.7; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0; toast('Reloading...') } if (W.cur == 0 && W.reload <= 0 && W.ammo < 12) { W.reload = 1.6; toast('Reloading...') } }
+    const WEAPON_ALTERNATES = { handgun: 'buckshot', sword: 'guard', rifle: 'chargedShot' };
+    function setLoadout() {
+      const handgun = $('handgunLoadout').value, swordAlt = $('swordLoadout').value, rifleAlt = $('rifleLoadout').value;
+      const handgunChanged = handgun != WEAPON_ALTERNATES.handgun, swordChanged = swordAlt != WEAPON_ALTERNATES.sword, rifleChanged = rifleAlt != WEAPON_ALTERNATES.rifle;
+      deactivateAlternate(true);
+      WEAPON_ALTERNATES.handgun = handgun; WEAPON_ALTERNATES.sword = swordAlt; WEAPON_ALTERNATES.rifle = rifleAlt;
+      if (handgunChanged) W.evolveBonus = 0;
+      if (rifleChanged) {
+        W.rAmmo = Math.min(W.rAmmo, rifleAmmoCapacity());
+        W.rReload = 0; W.poisonBurst = 0; W.scope = false; W.scopeCharge = 0
+      }
+      if (swordChanged) { W.parryFrames = 0; W.parryWaveReady = false }
+      W.blocking = false
+    }
     const WEAPON_ACTIONS = {
       buckshot: { start: () => fireGun(true) },
-      block: { start: () => { if (W.blockCD > 0) toast('Block on cooldown'); else W.blocking = true }, end: () => { W.blocking = false } },
-      scopeShot: {
+      guard: { start: () => { if (W.blockCD > 0) { toast('Guard on cooldown'); return false } W.blocking = true }, end: () => { W.blocking = false } },
+      perfectParry: {
         start: () => {
-          if (W.rReload > 0) { toast('Cannot aim while reloading'); return }
+          if (W.parryCD > 0) { toast('Perfect Parry cooldown ' + W.parryCD.toFixed(1) + 's'); return false }
+          W.parryCD = 15; W.parryFrames = 5; toast('Perfect Parry ready')
+        }
+      },
+      chargedShot: {
+        start: () => {
+          if (W.rReload > 0) { toast('Cannot aim while reloading'); return false }
           W.scope = true; W.scopeCharge = 0
         },
         end: cancel => {
           if (!cancel && W.scope && !W.swap && !P.dead && locked) fireRifle();
           W.scope = false; W.scopeCharge = 0
         }
-      }
+      },
+      poisonShot: { start: () => {
+        if (W.rReload > 0) { toast('Cannot fire while reloading'); return false }
+        if (W.rAmmo <= 0) { toast('Empty - press R'); return false }
+        if (W.cdT > 0) { toast('Rifle cooling down'); return false }
+        W.poisonBurst = Math.min(5, W.rAmmo); W.poisonBurstT = .09; W.cdT = .55; firePoisonBullet(); W.poisonBurst--
+      } }
     };
     function activateAlternate() {
       if (W.activeAlt) return;
@@ -569,8 +689,9 @@
       const action = WEAPON_ALTERNATES[weapon];
       const handler = WEAPON_ACTIONS[action];
       if (!handler) { toast('No alternate action configured'); return }
+      if (action == 'evolve') { toast('Evolve passive: ' + (10 + W.evolveBonus) + ' damage'); return }
       W.activeAlt = action;
-      handler.start()
+      if (handler.start() === false) W.activeAlt = null
     }
     function deactivateAlternate(cancel = false) {
       if (!W.activeAlt) return;
@@ -580,7 +701,7 @@
     }
     function swapTo(i) {
       if (W.cur == i || W.swap) return;
-      deactivateAlternate(true); W.swap = 1; W.target = i; W.blocking = false; W.charging = false; W.down = false; W.scope = false; W.scopeCharge = 0;
+      deactivateAlternate(true); W.swap = 1; W.target = i; W.blocking = false; W.charging = false; W.down = false; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0; W.parryFrames = 0;
       if (W.reload > 0 || W.rReload > 0) toast('Reload cancelled'); W.reload = 0; W.rReload = 0
     }
     // ---------- input ----------
@@ -589,20 +710,31 @@
     const sv = $('sv'); sv.value = SENS; $('svv').textContent = SENS.toFixed(2);
     sv.oninput = () => { SENS = +sv.value; $('svv').textContent = SENS.toFixed(2); try { localStorage.setItem('sens', SENS) } catch (e) { } };
     let started = false;
+    function updateMenu() {
+      $('menuTitle').textContent = started ? 'PAUSED' : 'FPS PROTOTYPE';
+      $('startButton').textContent = started ? 'Resume' : 'Start Game';
+      $('quitButton').style.display = started ? 'block' : 'none';
+      $('levelSelect').disabled = started
+    }
     function beginGame() {
+      setLoadout();
       started = true;
       $('levelName').textContent = $('levelSelect').selectedOptions[0].textContent;
       R.domElement.requestPointerLock()
     }
     $('startButton').onclick = beginGame;
+    $('quitButton').onclick = () => {
+      started = false; deactivateAlternate(true); W.down = false; W.charging = false; W.chargeT = 0;
+      W.blocking = false; W.poisonBurst = 0; W.parryFrames = 0; W.parryWaveReady = false;
+      updateMenu()
+    };
+    ['handgunLoadout', 'swordLoadout', 'rifleLoadout'].forEach(id => $(id).addEventListener('change', () => { setLoadout(); hud() }));
     document.addEventListener('pointerlockchange', () => {
       locked = document.pointerLockElement === R.domElement;
       if (!locked) { deactivateAlternate(true); W.down = false; W.charging = false; W.chargeT = 0; W.blocking = false }
       $('ov').style.display = locked ? 'none' : 'flex';
       $('levelName').style.display = locked ? 'block' : 'none';
-      $('menuTitle').textContent = started ? 'PAUSED' : 'FPS PROTOTYPE';
-      $('startButton').textContent = started ? 'Resume' : 'Start Game';
-      $('levelSelect').disabled = started;
+      updateMenu()
     });
     addEventListener('mousemove', e => { if (!locked) return; P.yaw -= e.movementX * .0022 * SENS * cam.fov / 75; P.pitch = Math.max(-1.45, Math.min(1.45, P.pitch - e.movementY * .0022 * SENS * cam.fov / 75)) });
     addEventListener('contextmenu', e => e.preventDefault());
@@ -610,8 +742,10 @@
       if (!locked || W.swap || P.dead) return;
       if (e.button == 0) {
         if (W.cur == 0) fireGun();
-        else if (W.cur == 2) { W.down = true; if (W.scope) fireRifle() }
-        else { W.down = true; W.holdT = 0; W.chargeReady = W.waveCD <= 0; W.chargeChecked = false }
+        else if (W.cur == 2) W.down = true;
+        else if (W.parryWaveReady) {
+          W.parryWaveReady = false; W.swing = .3; W.swingV ^= 1; fireWave(true); W.waveCD = 1; W.cdT = .3
+        } else { W.down = true; W.holdT = 0; W.chargeReady = W.waveCD <= 0; W.chargeChecked = false }
       }
       if (e.button == 2) activateAlternate()
     });
@@ -745,7 +879,14 @@
       }
       cam.position.set(P.pos.x, P.eyeY, P.pos.z); const tf = ((W.cur == 2 && W.scope) ? 75 / 1.8 : 75) * (1 - .2 * P.dashFx); cam.fov += (tf - cam.fov) * Math.min(1, dt * 14); cam.updateProjectionMatrix(); muzzle = W.cur == 2 ? rflash : flash; { const as = (W.cur == 2 && W.scope) ? .5 : 0; cam.rotation.set(P.pitch + W.ck + Math.abs(Math.cos(bobT)) * .015 * bobA * as, P.yaw + Math.sin(bobT) * .02 * bobA * as, P.roll, 'YXZ') };
       // weapon state
-      W.cdT -= dt; W.waveCD -= dt; if (W.rReload > 0) { W.rReload -= dt; if (W.rReload <= 0) W.rAmmo = 35 }
+      W.cdT -= dt; W.waveCD -= dt; W.parryCD = Math.max(0, W.parryCD - dt);
+      if (W.poisonBurst > 0 && W.cur == 2 && !W.swap) {
+        W.poisonBurstT -= dt;
+        while (W.poisonBurst > 0 && W.poisonBurstT <= 0) {
+          W.poisonBurst--; firePoisonBullet(); W.poisonBurstT += .09
+        }
+      }
+      if (W.rReload > 0) { W.rReload -= dt; if (W.rReload <= 0) W.rAmmo = rifleAmmoCapacity() }
       if (W.cur == 2 && !W.swap && W.down && !W.scope) fireRifle(); if (W.reload > 0) { W.reload -= dt; if (W.reload <= 0) W.ammo = 12 }
       if (W.swing > 0) W.swing -= dt;
       if (W.swap == 1) { W.wOff -= dt * 4; if (W.wOff <= -.7) { W.wOff = -.7; W.cur = W.target; gun.visible = W.cur == 0; sword.visible = W.cur == 1; W.swap = 2 } }
@@ -806,7 +947,8 @@
       }
       // enemies
       for (const e of enemies) {
-        if (!e.alive) { e.rt -= dt; if (e.rt <= 0) { e.alive = true; e.hp = e.max; e.bar.scale.x = 1; if (e.type == 3) { e.b.combo = 3; e.b.foot = 1 } e.g.visible = true; e.g.position.copy(e.home); e.cd = 1 } continue }
+        updatePoison(e, dt);
+        if (!e.alive) { e.rt -= dt; if (e.rt <= 0) { e.alive = true; e.hp = e.max; e.bar.scale.x = 1; e.poisonStacks = 0; e.poisonT = 0; e.poisonTick = 0; e.bar.material.color.setHex(0x33ff55); if (e.type == 3) { e.b.combo = 3; e.b.foot = 1 } e.g.visible = true; e.g.position.copy(e.home); e.cd = 1 } continue }
         e.bar.quaternion.copy(cam.quaternion);
         const dx = P.pos.x - e.g.position.x, dz = P.pos.z - e.g.position.z, dist = Math.hypot(dx, dz);
         if (e.type == 3) { bossAI(e, dt, dx, dz, dist); continue }
@@ -829,6 +971,7 @@
         for (const b of obs) if (Math.abs(p.m.position.x - b.x) < b.w / 2 && Math.abs(p.m.position.z - b.z) < b.d / 2 && p.m.position.y < 3) rm = true;
         if (rm) { S.remove(p.m); eProj.splice(i, 1) }
       }
+      if (W.parryFrames > 0) W.parryFrames--;
       hud()
     }
     function ring(el, p, C, col) { el.style.strokeDashoffset = C * (1 - Math.max(0, Math.min(1, p))); el.style.stroke = col }
@@ -837,9 +980,12 @@
       $('rr').style.display = rp >= 0 ? 'block' : 'none'; if (rp >= 0) ring($('rrp'), rp, 138.23, '#fff');
       $('rings').style.display = W.cur == 1 ? 'flex' : 'none';
       if (W.cur == 1) {
-        const bc = W.blockCD > 0, wc = W.waveCD > 0;
-        ring($('rb'), bc ? 1 - W.blockCD / 8 : 1, 163.36, bc ? '#c44' : '#4cf'); ring($('rw'), wc ? 1 - W.waveCD : 1, 163.36, wc ? '#c44' : '#fd0');
-        $('rbt').textContent = bc ? W.blockCD.toFixed(1) : '\u2713'; $('rwt').textContent = wc ? W.waveCD.toFixed(1) : '\u2713'
+        const parry = WEAPON_ALTERNATES.sword == 'perfectParry', bc = W.blockCD > 0, wc = W.waveCD > 0;
+        $('rings').children[0].querySelector('span').textContent = parry ? 'PARRY' : 'GUARD';
+        ring($('rb'), parry ? 1 - W.parryCD / 15 : bc ? 1 - W.blockCD / 8 : 1, 163.36, parry ? W.parryFrames ? '#fd0' : W.parryCD > 0 ? '#c44' : '#4cf' : bc ? '#c44' : '#4cf');
+        ring($('rw'), wc ? 1 - W.waveCD : 1, 163.36, wc ? '#c44' : '#fd0');
+        $('rbt').textContent = parry ? W.parryFrames ? String(W.parryFrames) : W.parryCD > 0 ? W.parryCD.toFixed(1) : '\u2713' : bc ? W.blockCD.toFixed(1) : '\u2713';
+        $('rwt').textContent = wc ? W.waveCD.toFixed(1) : W.parryWaveReady ? 'READY' : '\u2713'
       }
     }
     function hudBoss() {
@@ -852,15 +998,33 @@
       $('hp').firstChild.style.width = P.hp / 2 + '%'; $('hp').lastChild.textContent = 'HP ' + Math.ceil(P.hp) + ' / 200';
       const ds = $('dash').children; for (let i = 0; i < 3; i++)ds[i].firstChild.style.width = (i < P.dash ? 100 : i == P.dash ? P.dashTimer / 2.5 * 100 : 0) + '%';
       const cb = $('cb'), bi = cb.firstChild, bs = cb.lastChild; let show = false;
-      if (W.cur == 0) { $('wn').textContent = 'Handgun : ' + W.ammo + '/12'; $('wm').textContent = 'Left click: single · RMB: buckshot (6)' + (W.reload > 0 ? ' · reloading' : '') }
-      else if (W.cur == 2) { $('wn').textContent = 'Rifle : ' + W.rAmmo + '/35'; $('wm').textContent = (W.scope ? 'SNIPER 1.8x · release RMB to fire' : 'AUTO · RMB: charge sniper shot') + (W.rReload > 0 ? ' · reloading' : '') }
-      else { $('wn').textContent = 'Sword'; $('wm').textContent = 'Click: fast slash · hold: charge wave · RMB: block' }
+      if (W.cur == 0) {
+        const evolve = WEAPON_ALTERNATES.handgun == 'evolve';
+        $('wn').textContent = 'Handgun : ' + W.ammo + '/12';
+        $('wm').textContent = (evolve ? 'Evolve · ' + (10 + W.evolveBonus) + ' damage · +2 per hit · resets on damage' : 'Buckshot · RMB burst (6)') + (W.reload > 0 ? ' · reloading' : '')
+      }
+      else if (W.cur == 2) {
+        const poison = WEAPON_ALTERNATES.rifle == 'poisonShot';
+        $('wn').textContent = 'Rifle : ' + W.rAmmo + '/' + rifleAmmoCapacity();
+        $('wm').textContent = poison ? (W.poisonBurst > 0 ? 'Poison burst · ' + W.poisonBurst + ' shots left' : 'Poison Shot · RMB burst (5) · 50% poison chance') : W.scope ? 'Charged Shot · release RMB to fire' : 'Charged Shot · hold RMB, release to fire';
+        if (W.rReload > 0) $('wm').textContent += ' · reloading'
+      }
+      else {
+        const parry = WEAPON_ALTERNATES.sword == 'perfectParry';
+        $('wn').textContent = 'Sword';
+        $('wm').textContent = (parry ? 'Perfect Parry · RMB · ' + (W.parryWaveReady ? 'instant wave ready' : W.parryFrames ? W.parryFrames + ' frames' : W.parryCD > 0 ? W.parryCD.toFixed(1) + 's cooldown' : 'ready') : 'Guard · hold RMB') + ' · click: slash · hold: wave'
+      }
       if (W.cur == 1) {
         if (W.charging) { show = true; const c = W.chargeT; bi.style.width = Math.min(c / 3, 1) * 100 + '%'; const perf = c >= 3 && c <= 3.2; bi.style.background = perf ? '#fd0' : '#ddd'; bs.textContent = c < 3 ? 'Charging wave...' : perf ? 'PERFECT - release now!' : 'Fully charged - release' }
+        else if (WEAPON_ALTERNATES.sword == 'perfectParry') {
+          show = true; bi.style.width = W.parryFrames ? W.parryFrames / 5 * 100 : W.parryCD > 0 ? (1 - W.parryCD / 15) * 100 : 100;
+          bi.style.background = W.parryFrames ? '#fd0' : W.parryCD > 0 ? '#a33' : '#4cf';
+          bs.textContent = W.parryWaveReady ? 'Perfect parry! Next attack sends an instant wave' : W.parryFrames ? 'Parry window: ' + W.parryFrames + ' frames' : W.parryCD > 0 ? 'Perfect Parry cooldown ' + W.parryCD.toFixed(1) + 's' : 'Perfect Parry ready · press RMB'
+        }
         else if (W.waveCD > 0 && W.down) { show = true; bi.style.width = (1 - W.waveCD) * 100 + '%'; bi.style.background = '#a33'; bs.textContent = 'Wave cooldown ' + W.waveCD.toFixed(1) + 's' }
         else {
-          show = true; if (W.blockCD > 0) { bi.style.width = (1 - W.blockCD / 8) * 100 + '%'; bi.style.background = '#a33'; bs.textContent = 'Block cooldown ' + W.blockCD.toFixed(1) + 's' }
-          else { bi.style.width = W.blockHP / 40 * 100 + '%'; bi.style.background = W.blocking ? '#4cf' : '#8ac'; bs.textContent = 'Block ' + Math.ceil(W.blockHP) + '/40' + (W.blocking ? ' (active)' : '') }
+          show = true; if (W.blockCD > 0) { bi.style.width = (1 - W.blockCD / 8) * 100 + '%'; bi.style.background = '#a33'; bs.textContent = 'Guard cooldown ' + W.blockCD.toFixed(1) + 's' }
+          else { bi.style.width = W.blockHP / 40 * 100 + '%'; bi.style.background = W.blocking ? '#4cf' : '#8ac'; bs.textContent = 'Guard ' + Math.ceil(W.blockHP) + '/40' + (W.blocking ? ' (active)' : '') }
         }
       }
       cb.style.display = show ? 'block' : 'none'
