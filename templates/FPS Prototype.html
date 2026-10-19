@@ -123,6 +123,28 @@
       box-shadow: 0 0 2px #000
     }
 
+    #parryIndicator {
+      position: fixed;
+      left: 50%;
+      top: calc(50% + 18px);
+      transform: translateX(-50%);
+      color: #ffd700;
+      font-size: 18px;
+      font-weight: 700;
+      text-shadow: 0 1px 4px #000;
+      opacity: 0;
+      pointer-events: none
+    }
+
+    #parryIndicator.show {
+      animation: parryFade 3s ease-out forwards
+    }
+
+    @keyframes parryFade {
+      0%, 65% { opacity: 1 }
+      100% { opacity: 0 }
+    }
+
     #prompt,
     #toast {
       position: fixed;
@@ -420,6 +442,7 @@
   <div id="levelName">0.1 testing</div>
   <div id="star">✸</div>
   <div id="cross"></div>
+  <div id="parryIndicator" aria-live="polite">Parry</div>
   <div id="scope">
     <div id="sg"><i></i></div>
   </div>
@@ -510,13 +533,19 @@
     function hurt(d) {
       if (P.dead) return;
       if (W.cur == 1 && WEAPON_ALTERNATES.sword == 'perfectParry' && W.parryFrames > 0) {
-        W.parryFrames = 0; W.parryCD = 0; W.parryWaveReady = true; toast('Perfect parry! Next slash fires a wave'); return
+        W.parryFrames = 0; W.parryCD = 0; W.parryWaveReady = true; showParryIndicator(); toast('Perfect parry! Next slash fires a wave'); return
       }
       if (W.cur == 1 && W.blocking) { const a = Math.min(d, W.blockHP); W.blockHP -= a; d -= a; if (W.blockHP <= 0) { W.blocking = false; W.blockCD = 8; toast('Guard broken! 8s cooldown') } }
       if (W.charging) d *= .9; if (d <= 0) return;
       if (WEAPON_ALTERNATES.handgun == 'evolve') W.evolveBonus = 0;
       P.hp -= d; const f = $('flash'); f.style.opacity = .5; setTimeout(() => f.style.opacity = 0, 120);
       if (P.hp <= 0) { P.hp = 0; P.dead = true; P.deadT = 0; W.down = false; W.charging = false; W.blocking = false; W.scope = false; toast('You were defeated') }
+    }
+    function showParryIndicator() {
+      const indicator = $('parryIndicator');
+      indicator.classList.remove('show');
+      void indicator.offsetWidth;
+      indicator.classList.add('show')
     }
     let tt; function toast(s) { const t = $('toast'); t.textContent = s; t.style.opacity = 1; clearTimeout(tt); tt = setTimeout(() => t.style.opacity = 0, 1600) }
     const POISON_DAMAGE_PER_STACK = 2, POISON_PROC_CHANCE = .5;
@@ -654,6 +683,9 @@
         W.rAmmo = Math.min(W.rAmmo, rifleAmmoCapacity());
         W.rReload = 0; W.poisonBurst = 0; W.scope = false; W.scopeCharge = 0
       }
+      W.parryCD = 0;
+      W.parryFrames = 0;
+      W.parryWaveReady = false;
       if (swordChanged) { W.parryFrames = 0; W.parryWaveReady = false }
       W.blocking = false
     }
@@ -718,6 +750,9 @@
     }
     function beginGame() {
       setLoadout();
+      W.parryCD = 0;
+      W.parryFrames = 0;
+      W.parryWaveReady = false;
       started = true;
       $('levelName').textContent = $('levelSelect').selectedOptions[0].textContent;
       R.domElement.requestPointerLock()
@@ -725,7 +760,7 @@
     $('startButton').onclick = beginGame;
     $('quitButton').onclick = () => {
       started = false; deactivateAlternate(true); W.down = false; W.charging = false; W.chargeT = 0;
-      W.blocking = false; W.poisonBurst = 0; W.parryFrames = 0; W.parryWaveReady = false;
+      W.blocking = false; W.poisonBurst = 0; W.parryCD = 0; W.parryFrames = 0; W.parryWaveReady = false;
       updateMenu()
     };
     ['handgunLoadout', 'swordLoadout', 'rifleLoadout'].forEach(id => $(id).addEventListener('change', () => { setLoadout(); hud() }));
