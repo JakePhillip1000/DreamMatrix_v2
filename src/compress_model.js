@@ -153,7 +153,7 @@ function convertMaterial(original) {
     const properties = [
         "name",
         "map",
-        "aoMap",
+        "aoMap", // ambient occlusion
         "emissiveMap",
         "alphaMap",
         "opacity",
@@ -161,7 +161,7 @@ function convertMaterial(original) {
         "alphaTest",
         "side",
         "vertexColors",
-        "depthWrite"
+        "depthWrite" // normal mapping
     ];
 
     for (const property of properties) {
@@ -172,19 +172,20 @@ function convertMaterial(original) {
 
     material.color.copy(original.color);
 
-    //     // Preserve the FBX emission intensity as well as its color.
     if (original.emissive) {
         material.emissive.copy(original.emissive);
         material.emissiveIntensity = original.emissiveIntensity;
     }
-if (original.normalScale) {
+
+    if (original.normalScale) {
         material.normalScale.copy(original.normalScale);
     }
 
     if (original.shininess !== undefined) {
         const roughness = Math.sqrt(2 / (original.shininess + 2));
         material.roughness = Math.max(0.35, Math.min(1, roughness));
-    } else {
+    } 
+    else {
         material.roughness = 1;
     }
 
@@ -296,8 +297,7 @@ async function saveModelWithTextures() {
         await writeFile(imagePath, result.resources[image.uri]);
         image.uri = path.relative(path.dirname(output), imagePath).split(path.sep).join("/");
     }
-
-    // GLB stores geometry in its binary chunk and references the image files.
+    
     const jsonBytes = Buffer.from(JSON.stringify(json));
     const jsonChunk = Buffer.alloc(Math.ceil(jsonBytes.length / 4) * 4, 0x20);
     jsonBytes.copy(jsonChunk);
