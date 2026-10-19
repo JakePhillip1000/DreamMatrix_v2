@@ -73,6 +73,18 @@
       display: contents
     }
 
+    #handgunDetails {
+      max-width: 420px;
+      padding: 10px 14px;
+      border: 1px solid #ffffff33;
+      border-radius: 5px;
+      background: #0004;
+      text-align: left;
+      white-space: pre-line;
+      font-size: 13px;
+      line-height: 1.45
+    }
+
     #menuPanel select,
     #menuPanel button {
       min-width: 220px;
@@ -141,8 +153,15 @@
     }
 
     @keyframes parryFade {
-      0%, 65% { opacity: 1 }
-      100% { opacity: 0 }
+
+      0%,
+      65% {
+        opacity: 1
+      }
+
+      100% {
+        opacity: 0
+      }
     }
 
     #prompt,
@@ -407,14 +426,13 @@
     <div id="menuPanel">
       <h1 id="menuTitle">FPS PROTOTYPE</h1>
       <label for="levelSelect">Select level
-        <select id="levelSelect"><option value="testing">0.1 testing</option></select>
+        <select id="levelSelect">
+          <option value="testing">0.1 testing</option>
+        </select>
       </label>
       <div id="loadout" aria-label="Weapon loadout">
-        <label for="handgunLoadout">Handgun
-          <select id="handgunLoadout">
-            <option value="buckshot">Buckshot</option>
-            <option value="evolve">Evolve</option>
-          </select>
+        <label for="handgunLoadout">Handgun archetype
+          <select id="handgunLoadout"></select>
         </label>
         <label for="swordLoadout">Sword
           <select id="swordLoadout">
@@ -429,11 +447,12 @@
           </select>
         </label>
       </div>
+      <div id="handgunDetails" aria-live="polite"></div>
       <button id="startButton" type="button">Start Game</button>
       <button id="quitButton" type="button">Quit to Main Menu</button>
       <small>WASD move · Mouse look · Shift dash · F interact · 1/2/3 or Q swap · R reload<br>
         Sword: click to slash · hold left click to charge a wave · right click uses equipped skill<br>
-        Evolve: 10 base damage, +2 per hit · Perfect Parry: 5-frame window, 15s cooldown<br>
+        Handgun archetypes have unique attacks, passives, and skills · Perfect Parry: 5-frame window, 15s cooldown<br>
         Poison Shot: 15 rounds, 6 damage · 2 poison damage/stack/s · 50% chance · max stacks deal instant damage</small>
       <div id="sens" onclick="event.stopPropagation()">Sensitivity <input type="range" id="sv" min="0.2" max="3"
           step="0.05" value="1"> <b id="svv">1.00</b></div>
@@ -528,7 +547,8 @@
       cur: 0, waveCD: 0, rAmmo: 35, rReload: 0, scope: false, scopeCharge: 0, poisonBurst: 0, poisonBurstT: 0,
       ammo: 12, cdT: 0, reload: 0, swap: 0, wOff: 0, target: 0, swing: 0,
       blocking: false, blockHP: 40, regT: 0, swingV: 1, ck: 0, blockCD: 0, parryCD: 0, parryFrames: 0, parryWaveReady: false,
-      evolveBonus: 0, holdT: 0, down: false, charging: false, chargeT: 0, chargeReady: false, chargeChecked: false, activeAlt: null
+      handgunPassiveStacks: 0, handgunSkillCD: 0, handgunBurst: null,
+      holdT: 0, down: false, charging: false, chargeT: 0, chargeReady: false, chargeChecked: false, activeAlt: null
     };
     function hurt(d) {
       if (P.dead) return;
@@ -537,9 +557,13 @@
       }
       if (W.cur == 1 && W.blocking) { const a = Math.min(d, W.blockHP); W.blockHP -= a; d -= a; if (W.blockHP <= 0) { W.blocking = false; W.blockCD = 8; toast('Guard broken! 8s cooldown') } }
       if (W.charging) d *= .9; if (d <= 0) return;
-      if (WEAPON_ALTERNATES.handgun == 'evolve') W.evolveBonus = 0;
+      if (W.cur == 0) PASSIVE_MECHANICS[handgunConfig().passive].onDamage();
       P.hp -= d; const f = $('flash'); f.style.opacity = .5; setTimeout(() => f.style.opacity = 0, 120);
-      if (P.hp <= 0) { P.hp = 0; P.dead = true; P.deadT = 0; W.down = false; W.charging = false; W.blocking = false; W.scope = false; toast('You were defeated') }
+      if (P.hp <= 0) {
+        P.hp = 0; P.dead = true; P.deadT = 0; W.down = false; W.charging = false; W.blocking = false; W.scope = false;
+        W.handgunBurst = null; W.handgunPassiveStacks = 0; W.handgunSkillCD = 0;
+        toast('You were defeated')
+      }
     }
     function showParryIndicator() {
       const indicator = $('parryIndicator');
@@ -605,7 +629,7 @@
       const m = new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, 1, 5), new THREE.MeshBasicMaterial({ color: 0xffee88, transparent: true, opacity: .9 }));
       m.scale.y = len; m.position.copy(_a).addScaledVector(dir, len / 2); m.quaternion.setFromUnitVectors(Y, dir); S.add(m); tracers.push({ m, t: .15 })
     }
-    function shoot(spread, dmg = 15, onHit) {
+    function shoot(spread, dmg = 15, onHit, onMiss) {
       ray.setFromCamera({ x: (Math.random() - .5) * spread, y: (Math.random() - .5) * spread }, cam);
       const act = targets.filter(m => m.userData.e.alive); const h = ray.intersectObjects(act.concat(obsM), false)[0];
       tracer(h ? h.point : ray.ray.at(80, new THREE.Vector3()));
@@ -613,19 +637,76 @@
         const e = h.object.userData.e, weakspot = !!h.object.userData.head;
         hitEnemy(e, dmg, weakspot);
         if (onHit) onHit(e, weakspot)
-      }
+      } else if (onMiss) onMiss()
       return h && h.object.userData.e ? h.object.userData.e : null
     }
-    function fireGun(buckshot = false) {
-      if (W.cdT > 0 || W.reload > 0 || W.ammo <= 0) return;
-      if (buckshot) { const n = Math.min(6, W.ammo); for (let i = 0; i < n; i++)shoot(.18); W.ammo -= n; W.cdT = .6; kick = 3.6 }
-      else {
-        const evolve = WEAPON_ALTERNATES.handgun == 'evolve', dmg = evolve ? 10 + W.evolveBonus : 15;
-        const hit = shoot(0, dmg);
-        if (evolve && hit) W.evolveBonus += 2;
-        W.ammo--; W.cdT = .25; kick = 1
+    function handgunConfig() { return getArchetype('handgun', WEAPON_SELECTIONS.handgun) }
+    function handgunShotFx() {
+      fT = .06; flash.visible = true; fl.intensity = 3
+      if (W.ammo == 0) toast('Empty - press R')
+    }
+    function fireHandgunSingle() {
+      const config = handgunConfig(), passive = PASSIVE_MECHANICS[config.passive];
+      if (W.cdT > 0 || W.reload > 0 || W.ammo <= 0 || W.handgunBurst) return;
+      shoot(0, config.stats.damage + passive.damageBonus(), (e, weakspot) => passive.onHit(e, weakspot), () => passive.onMiss());
+      W.ammo--; W.cdT = config.stats.fireInterval; kick = config.stats.kick; handgunShotFx()
+    }
+    function fireHandgunBurstShot() {
+      const burst = W.handgunBurst;
+      if (!burst || W.ammo <= 0 || W.reload > 0) { W.handgunBurst = null; return }
+      const passive = PASSIVE_MECHANICS[burst.config.passive];
+      shoot(burst.spread, burst.damage + passive.damageBonus(), (e, weakspot) => passive.onHit(e, weakspot), () => passive.onMiss());
+      W.ammo--; burst.remaining--; kick = burst.config.stats.kick; handgunShotFx();
+      if (burst.remaining > 0) {
+        burst.timer = burst.interval;
+        W.cdT = burst.interval
+      } else {
+        W.handgunBurst = null;
+        W.cdT = Math.max(W.cdT, burst.cooldown)
       }
-      fT = .06; flash.visible = true; fl.intensity = 3; if (W.ammo == 0) toast('Empty - press R')
+    }
+    function startHandgunBurst(config, count, spread, damage, interval, cooldown) {
+      if (W.cdT > 0 || W.reload > 0 || W.ammo <= 0 || W.handgunBurst) return false;
+      const shots = Math.min(count, W.ammo);
+      W.handgunBurst = { config, remaining: shots - 1, spread, damage, interval, cooldown, timer: 0 };
+      fireHandgunBurstShot();
+      if (W.handgunBurst) W.handgunBurst.timer = interval;
+      return true
+    }
+    function fireHandgunBuckshot() {
+      const config = handgunConfig(), passive = PASSIVE_MECHANICS[config.passive];
+      if (W.cdT > 0 || W.reload > 0 || W.ammo <= 0) { if (W.ammo <= 0) toast('Empty - press R'); return false }
+      const count = Math.min(config.stats.skillShotCount, W.ammo);
+      for (let i = 0; i < count; i++) {
+        shoot(config.stats.skillSpread, config.stats.skillDamage, (e, weakspot) => passive.onHit(e, weakspot), () => passive.onMiss())
+      }
+      W.ammo -= count; W.cdT = config.stats.skillCooldown; kick = config.stats.skillKick; handgunShotFx();
+      return true
+    }
+    function fireRevolverSkill() {
+      const config = handgunConfig(), passive = PASSIVE_MECHANICS[config.passive];
+      if (W.handgunSkillCD > 0) { toast('Precision Round cooldown ' + W.handgunSkillCD.toFixed(1) + 's'); return false }
+      if (W.cdT > 0 || W.reload > 0 || W.ammo <= 0) { if (W.ammo <= 0) toast('Empty - press R'); return false }
+      const stacks = W.handgunPassiveStacks;
+      shoot(0, config.stats.damage + passive.damageBonus() + stacks * config.stats.skillDamagePerStack,
+        () => passive.onHit(null, false), () => passive.onMiss());
+      W.handgunPassiveStacks = 0; W.ammo--; W.cdT = config.stats.skillFireInterval;
+      W.handgunSkillCD = config.stats.skillCooldown; kick = config.stats.kick * 1.8; handgunShotFx();
+      toast('Precision Round · spent ' + stacks + ' precision')
+    }
+    function fireBurstSkill() {
+      const config = handgunConfig(), passive = PASSIVE_MECHANICS[config.passive];
+      if (W.handgunSkillCD > 0) { toast('Overdrive cooldown ' + W.handgunSkillCD.toFixed(1) + 's'); return false }
+      if (W.ammo <= 0) { toast('Empty - press R'); return false }
+      const stacks = W.handgunPassiveStacks;
+      W.handgunPassiveStacks = 0;
+      const started = startHandgunBurst(config, config.stats.skillBurstCount, config.stats.skillSpread,
+        config.stats.skillDamage + stacks * config.stats.skillDamagePerStack,
+        config.stats.burstInterval, config.stats.skillCooldown);
+      if (!started) { W.handgunPassiveStacks = stacks; return false }
+      W.handgunSkillCD = config.stats.skillCooldown;
+      toast('Overdrive · spent ' + stacks + ' momentum')
+      return true
     }
     function firePoisonBullet() {
       if (W.rAmmo <= 0 || W.rReload > 0) { W.poisonBurst = 0; return }
@@ -637,6 +718,7 @@
       if (W.rAmmo == 0) toast('Empty - press R')
     }
     function fireRifle() {
+      if (fireRegisteredPrimary('rifle')) return;
       if (W.cdT > 0 || W.rReload > 0 || W.rAmmo <= 0) return; let cost = 1;
       if (W.scope) {
         if (W.rAmmo < 7) { toast('Sniper needs 7 bullets - reload (R) or right click for auto'); W.cdT = .6; return }
@@ -671,14 +753,56 @@
     }
     function fwd() { return new THREE.Vector3(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)) }
     function rifleAmmoCapacity() { return WEAPON_ALTERNATES.rifle == 'poisonShot' ? 15 : 35 }
-    function reload() { if (W.cur == 2 && W.rReload <= 0 && W.rAmmo < rifleAmmoCapacity() && !W.swap) { W.rReload = 2.7; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0; toast('Reloading...') } if (W.cur == 0 && W.reload <= 0 && W.ammo < 12) { W.reload = 1.6; toast('Reloading...') } }
-    const WEAPON_ALTERNATES = { handgun: 'buckshot', sword: 'guard', rifle: 'chargedShot' };
+    function handgunAmmoCapacity() { return handgunConfig().stats.ammoCapacity }
+    function handgunReloadDuration() { return handgunConfig().stats.reloadDuration }
+    function reload() {
+      if (W.cur == 2 && W.rReload <= 0 && W.rAmmo < rifleAmmoCapacity() && !W.swap) {
+        W.rReload = 2.7; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0; toast('Reloading...')
+      }
+      if (W.cur == 0 && W.reload <= 0 && W.ammo < handgunAmmoCapacity() && !W.swap) {
+        W.handgunBurst = null; W.reload = handgunReloadDuration(); toast('Reloading...')
+      }
+    }
+    const WEAPON_ALTERNATES = { sword: 'guard', rifle: 'chargedShot' };
     function setLoadout() {
-      const handgun = $('handgunLoadout').value, swordAlt = $('swordLoadout').value, rifleAlt = $('rifleLoadout').value;
-      const handgunChanged = handgun != WEAPON_ALTERNATES.handgun, swordChanged = swordAlt != WEAPON_ALTERNATES.sword, rifleChanged = rifleAlt != WEAPON_ALTERNATES.rifle;
+      if (started) {
+        for (const weaponId of Object.keys(WEAPON_DEFINITIONS)) {
+          const selector = $(archetypeSelectorId(weaponId));
+          if (selector && WEAPON_SELECTIONS[weaponId]) selector.value = WEAPON_SELECTIONS[weaponId]
+        }
+        $('swordLoadout').value = WEAPON_ALTERNATES.sword;
+        $('rifleLoadout').value = WEAPON_ALTERNATES.rifle;
+        toast('Change loadouts from the main menu');
+        return false
+      }
+      const selectedArchetypes = {};
+      for (const weaponId of Object.keys(WEAPON_DEFINITIONS)) {
+        const selector = $(archetypeSelectorId(weaponId));
+        if (!selector) continue;
+        if (!WEAPON_DEFINITIONS[weaponId].archetypes[selector.value]) {
+          if (WEAPON_SELECTIONS[weaponId]) selector.value = WEAPON_SELECTIONS[weaponId];
+          updateHandgunDetails();
+          toast('Unavailable ' + weaponId + ' archetype');
+          return false
+        }
+        selectedArchetypes[weaponId] = selector.value
+      }
+      const swordAlt = $('swordLoadout').value, rifleAlt = $('rifleLoadout').value;
+      const swordChanged = swordAlt != WEAPON_ALTERNATES.sword, rifleChanged = rifleAlt != WEAPON_ALTERNATES.rifle;
       deactivateAlternate(true);
-      WEAPON_ALTERNATES.handgun = handgun; WEAPON_ALTERNATES.sword = swordAlt; WEAPON_ALTERNATES.rifle = rifleAlt;
-      if (handgunChanged) W.evolveBonus = 0;
+      for (const [weaponId, selected] of Object.entries(selectedArchetypes)) {
+        if (selected != WEAPON_SELECTIONS[weaponId]) {
+          WEAPON_SELECTIONS[weaponId] = selected;
+          if (weaponId == 'handgun') {
+            W.ammo = handgunAmmoCapacity();
+            W.reload = 0;
+            W.handgunPassiveStacks = 0;
+            W.handgunSkillCD = 0;
+            W.handgunBurst = null
+          }
+        }
+      }
+      WEAPON_ALTERNATES.sword = swordAlt; WEAPON_ALTERNATES.rifle = rifleAlt;
       if (rifleChanged) {
         W.rAmmo = Math.min(W.rAmmo, rifleAmmoCapacity());
         W.rReload = 0; W.poisonBurst = 0; W.scope = false; W.scopeCharge = 0
@@ -687,10 +811,23 @@
       W.parryFrames = 0;
       W.parryWaveReady = false;
       if (swordChanged) { W.parryFrames = 0; W.parryWaveReady = false }
-      W.blocking = false
+      W.blocking = false;
+      updateHandgunDetails();
+      return true
     }
     const WEAPON_ACTIONS = {
-      buckshot: { start: () => fireGun(true) },
+      buckshot: {
+        validate: stats => stats.skillShotCount > 0 && stats.skillDamage >= 0 && stats.skillSpread >= 0 && stats.skillCooldown > 0 && stats.skillKick >= 0,
+        start: () => fireHandgunBuckshot()
+      },
+      precisionRound: {
+        validate: stats => stats.passiveDamagePerStack >= 0 && stats.skillDamagePerStack >= 0 && stats.skillCooldown > 0 && stats.skillFireInterval > 0,
+        start: () => fireRevolverSkill()
+      },
+      overdrive: {
+        validate: stats => stats.passiveDamagePerStack >= 0 && stats.skillBurstCount > 0 && stats.skillSpread >= 0 && stats.skillDamage >= 0 && stats.skillDamagePerStack >= 0 && stats.burstInterval > 0 && stats.skillCooldown > 0,
+        start: () => fireBurstSkill()
+      },
       guard: { start: () => { if (W.blockCD > 0) { toast('Guard on cooldown'); return false } W.blocking = true }, end: () => { W.blocking = false } },
       perfectParry: {
         start: () => {
@@ -708,20 +845,188 @@
           W.scope = false; W.scopeCharge = 0
         }
       },
-      poisonShot: { start: () => {
-        if (W.rReload > 0) { toast('Cannot fire while reloading'); return false }
-        if (W.rAmmo <= 0) { toast('Empty - press R'); return false }
-        if (W.cdT > 0) { toast('Rifle cooling down'); return false }
-        W.poisonBurst = Math.min(5, W.rAmmo); W.poisonBurstT = .09; W.cdT = .55; firePoisonBullet(); W.poisonBurst--
-      } }
+      poisonShot: {
+        start: () => {
+          if (W.rReload > 0) { toast('Cannot fire while reloading'); return false }
+          if (W.rAmmo <= 0) { toast('Empty - press R'); return false }
+          if (W.cdT > 0) { toast('Rifle cooling down'); return false }
+          W.poisonBurst = Math.min(5, W.rAmmo); W.poisonBurstT = .09; W.cdT = .55; firePoisonBullet(); W.poisonBurst--
+        }
+      }
     };
+    const WEAPON_DEFINITIONS = {};
+    function registerWeaponDefinition(definition) {
+      if (!definition || !definition.id || !definition.name || !definition.archetypes || WEAPON_DEFINITIONS[definition.id]) {
+        throw new Error('Invalid or duplicate weapon definition: ' + (definition && definition.id))
+      }
+      WEAPON_DEFINITIONS[definition.id] = definition
+    }
+    registerWeaponDefinition({ id: 'handgun', name: 'Handgun', defaultArchetype: 'pistol', archetypes: {} });
+    registerWeaponDefinition({ id: 'sword', name: 'Sword', defaultArchetype: null, archetypes: {} });
+    registerWeaponDefinition({ id: 'rifle', name: 'Rifle', defaultArchetype: null, archetypes: {} });
+    const WEAPON_SELECTIONS = { handgun: 'pistol', sword: null, rifle: null };
+    const PRIMARY_ATTACKS = {
+      single: { fire: () => fireHandgunSingle() },
+      burst: {
+        validate: stats => stats.burstCount > 0 && stats.burstSpread >= 0 && stats.burstInterval > 0 && stats.kick >= 0,
+        fire: config => startHandgunBurst(config, config.stats.burstCount, config.stats.burstSpread, config.stats.damage, config.stats.burstInterval, config.stats.fireInterval)
+      }
+    };
+    function fireHandgunPrimary() {
+      if (!fireRegisteredPrimary('handgun')) throw new Error('No handgun archetype is selected')
+    }
+    const PASSIVE_MECHANICS = {
+      evolve: {
+        damageBonus: () => W.handgunPassiveStacks,
+        onHit: () => { W.handgunPassiveStacks += 2 },
+        onMiss: () => {},
+        onDamage: () => { W.handgunPassiveStacks = 0 }
+      },
+      precision: {
+        damageBonus: () => W.handgunPassiveStacks * handgunConfig().stats.passiveDamagePerStack,
+        onHit: (enemy, weakspot) => { W.handgunPassiveStacks = Math.min(3, W.handgunPassiveStacks + (weakspot ? 2 : 1)) },
+        onMiss: () => { W.handgunPassiveStacks = 0 },
+        onDamage: () => { W.handgunPassiveStacks = 0 }
+      },
+      momentum: {
+        damageBonus: () => W.handgunPassiveStacks * handgunConfig().stats.passiveDamagePerStack,
+        onHit: () => { W.handgunPassiveStacks = Math.min(6, W.handgunPassiveStacks + 1) },
+        onMiss: () => { W.handgunPassiveStacks = 0 },
+        onDamage: () => { W.handgunPassiveStacks = 0 }
+      }
+    };
+    function registerArchetype(weaponId, archetype) {
+      const weapon = WEAPON_DEFINITIONS[weaponId];
+      const primary = archetype && PRIMARY_ATTACKS[archetype.primary];
+      const skill = archetype && WEAPON_ACTIONS[archetype.skill];
+      const valid = weapon && archetype && archetype.id && archetype.name && archetype.description &&
+        archetype.primary && archetype.passive && archetype.skill && archetype.stats &&
+        archetype.primaryDescription && archetype.passiveDescription && archetype.skillDescription &&
+        archetype.strengths && archetype.weaknesses &&
+        Number.isFinite(archetype.stats.damage) && archetype.stats.damage >= 0 &&
+        Number.isFinite(archetype.stats.fireInterval) && archetype.stats.fireInterval > 0 &&
+        (archetype.stats.ammoCapacity === undefined || (Number.isFinite(archetype.stats.ammoCapacity) && archetype.stats.ammoCapacity > 0)) &&
+        (archetype.stats.reloadDuration === undefined || (Number.isFinite(archetype.stats.reloadDuration) && archetype.stats.reloadDuration > 0)) &&
+        primary && (!primary.validate || primary.validate(archetype.stats)) &&
+        PASSIVE_MECHANICS[archetype.passive] &&
+        skill && (!skill.validate || skill.validate(archetype.stats));
+      if (!valid || weapon.archetypes[archetype.id]) throw new Error('Invalid or duplicate weapon archetype: ' + (archetype && archetype.id));
+      weapon.archetypes[archetype.id] = archetype;
+      if (!weapon.defaultArchetype) weapon.defaultArchetype = archetype.id
+    }
+    [
+      {
+        id: 'pistol', name: 'Pistol', description: 'Reliable, accurate fire with a familiar magazine.',
+        primary: 'single', passive: 'evolve', skill: 'buckshot',
+        primaryDescription: 'Single precise shot · 10 base damage · 0.25s interval',
+        passiveDescription: 'Evolve: each hit adds 2 damage; taking damage resets the bonus.',
+        skillDescription: 'Buckshot: spend up to 6 rounds on a wide, close-range burst.',
+        strengths: 'Accurate, steady damage with a useful burst option.',
+        weaknesses: 'Lower starting damage; buckshot consumes several rounds.',
+        stats: {
+          ammoCapacity: 12, reloadDuration: 1.6, damage: 10, fireInterval: .25, kick: 1,
+          skillShotCount: 6, skillDamage: 15, skillSpread: .18, skillCooldown: .6, skillKick: 3.6
+        }
+      },
+      {
+        id: 'revolver', name: 'Revolver', description: 'A slow, hard-hitting six-shot cylinder rewards careful aim.',
+        primary: 'single', passive: 'precision', skill: 'precisionRound',
+        primaryDescription: 'Single precise shot · 28 base damage · 0.65s interval',
+        passiveDescription: 'Precision: body hits build 1 stack, weak-spot hits build 2; misses or damage reset stacks.',
+        skillDescription: 'Precision Round: consume one round and spend stacks for extra damage.',
+        strengths: 'High impact; weak-spot hits build the skill faster.',
+        weaknesses: 'Six-round capacity, slow fire, and a longer reload.',
+        stats: {
+          ammoCapacity: 6, reloadDuration: 2.2, damage: 28, fireInterval: .65, kick: 2,
+          passiveDamagePerStack: 4, skillDamagePerStack: 6, skillCooldown: 1.4, skillFireInterval: .85
+        }
+      },
+      {
+        id: 'burstPistol', name: 'Burst Pistol', description: 'Three quick shots trade per-shot power for sustained pressure.',
+        primary: 'burst', passive: 'momentum', skill: 'overdrive',
+        primaryDescription: 'Three-round burst · 7 damage per shot · 0.075s spacing',
+        passiveDescription: 'Momentum: consecutive hits build up to 6 stacks, adding damage; a miss or hit taken resets them.',
+        skillDescription: 'Overdrive: spend momentum for a five-shot burst; new hits build momentum again.',
+        strengths: 'Fast follow-up shots and strong pressure when bursts connect.',
+        weaknesses: 'Consumes three rounds per trigger and is less ammo-efficient.',
+        stats: {
+          ammoCapacity: 18, reloadDuration: 1.8, damage: 7, fireInterval: .42, kick: .65,
+          burstCount: 3, burstSpread: .025, burstInterval: .075,
+          passiveDamagePerStack: 1.5, skillBurstCount: 5, skillSpread: .045, skillDamage: 5, skillDamagePerStack: 1.5,
+          skillCooldown: 2.5
+        }
+      }
+    ].forEach(archetype => registerArchetype('handgun', archetype));
+    function getArchetype(weaponId, archetypeId) {
+      const archetype = WEAPON_DEFINITIONS[weaponId] && WEAPON_DEFINITIONS[weaponId].archetypes[archetypeId];
+      if (!archetype) throw new Error('Unknown ' + weaponId + ' archetype: ' + archetypeId);
+      return archetype
+    }
+    function updateHandgunDetails() {
+      const config = getArchetype('handgun', $('handgunLoadout').value);
+      $('handgunDetails').textContent = [
+        config.name + ' — ' + config.description,
+        'Primary: ' + config.primaryDescription,
+        'Passive: ' + config.passiveDescription,
+        'Skill (RMB): ' + config.skillDescription,
+        'Ammo / reload: ' + config.stats.ammoCapacity + ' rounds / ' + config.stats.reloadDuration + 's',
+        'Strengths: ' + config.strengths,
+        'Trade-offs: ' + config.weaknesses
+      ].join('\n')
+    }
+    function archetypeSelectorId(weaponId) {
+      return weaponId == 'handgun' ? 'handgunLoadout' : weaponId + 'ArchetypeLoadout'
+    }
+    function populateArchetypeSelectors() {
+      for (const weapon of Object.values(WEAPON_DEFINITIONS)) {
+        const archetypes = Object.values(weapon.archetypes);
+        if (archetypes.length == 0) continue;
+        const selectorId = archetypeSelectorId(weapon.id);
+        let selector = $(selectorId);
+        if (!selector) {
+          const label = document.createElement('label');
+          label.htmlFor = selectorId;
+          label.textContent = weapon.name + ' archetype';
+          selector = document.createElement('select');
+          selector.id = selectorId;
+          label.appendChild(selector);
+          $('loadout').appendChild(label)
+        }
+        selector.replaceChildren(...archetypes.map(archetype => {
+          const option = document.createElement('option');
+          option.value = archetype.id;
+          option.textContent = archetype.name;
+          return option
+        }));
+        selector.value = weapon.defaultArchetype;
+        if (!WEAPON_SELECTIONS[weapon.id]) WEAPON_SELECTIONS[weapon.id] = weapon.defaultArchetype;
+        if (selector.dataset.archetypeSelector !== 'true') {
+          selector.dataset.archetypeSelector = 'true';
+          selector.addEventListener('change', () => { setLoadout(); hud() })
+        }
+      }
+      updateHandgunDetails()
+    }
+    function selectedArchetype(weaponId) {
+      const id = WEAPON_SELECTIONS[weaponId];
+      return id ? getArchetype(weaponId, id) : null
+    }
+    function fireRegisteredPrimary(weaponId) {
+      const config = selectedArchetype(weaponId);
+      if (!config) return false;
+      const attack = PRIMARY_ATTACKS[config.primary];
+      if (!attack) throw new Error('Missing primary attack handler for ' + config.id);
+      attack.fire(config);
+      return true
+    }
+    populateArchetypeSelectors();
     function activateAlternate() {
       if (W.activeAlt) return;
       const weapon = W.cur == 0 ? 'handgun' : W.cur == 1 ? 'sword' : 'rifle';
-      const action = WEAPON_ALTERNATES[weapon];
+      const config = selectedArchetype(weapon);
+      const action = config ? config.skill : WEAPON_ALTERNATES[weapon];
       const handler = WEAPON_ACTIONS[action];
       if (!handler) { toast('No alternate action configured'); return }
-      if (action == 'evolve') { toast('Evolve passive: ' + (10 + W.evolveBonus) + ' damage'); return }
       W.activeAlt = action;
       if (handler.start() === false) W.activeAlt = null
     }
@@ -733,6 +1038,7 @@
     }
     function swapTo(i) {
       if (W.cur == i || W.swap) return;
+      if (W.cur == 0) W.handgunBurst = null;
       deactivateAlternate(true); W.swap = 1; W.target = i; W.blocking = false; W.charging = false; W.down = false; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0; W.parryFrames = 0;
       if (W.reload > 0 || W.rReload > 0) toast('Reload cancelled'); W.reload = 0; W.rReload = 0
     }
@@ -746,10 +1052,11 @@
       $('menuTitle').textContent = started ? 'PAUSED' : 'FPS PROTOTYPE';
       $('startButton').textContent = started ? 'Resume' : 'Start Game';
       $('quitButton').style.display = started ? 'block' : 'none';
-      $('levelSelect').disabled = started
+      $('levelSelect').disabled = started;
+      $('loadout').querySelectorAll('select').forEach(selector => { selector.disabled = started })
     }
     function beginGame() {
-      setLoadout();
+      if (!started && !setLoadout()) return;
       W.parryCD = 0;
       W.parryFrames = 0;
       W.parryWaveReady = false;
@@ -761,9 +1068,10 @@
     $('quitButton').onclick = () => {
       started = false; deactivateAlternate(true); W.down = false; W.charging = false; W.chargeT = 0;
       W.blocking = false; W.poisonBurst = 0; W.parryCD = 0; W.parryFrames = 0; W.parryWaveReady = false;
+      W.handgunBurst = null; W.handgunPassiveStacks = 0; W.handgunSkillCD = 0;
       updateMenu()
     };
-    ['handgunLoadout', 'swordLoadout', 'rifleLoadout'].forEach(id => $(id).addEventListener('change', () => { setLoadout(); hud() }));
+    ['swordLoadout', 'rifleLoadout'].forEach(id => $(id).addEventListener('change', () => { setLoadout(); hud() }));
     document.addEventListener('pointerlockchange', () => {
       locked = document.pointerLockElement === R.domElement;
       if (!locked) { deactivateAlternate(true); W.down = false; W.charging = false; W.chargeT = 0; W.blocking = false }
@@ -776,8 +1084,9 @@
     addEventListener('mousedown', e => {
       if (!locked || W.swap || P.dead) return;
       if (e.button == 0) {
-        if (W.cur == 0) fireGun();
+        if (W.cur == 0) fireHandgunPrimary();
         else if (W.cur == 2) W.down = true;
+        else if (selectedArchetype('sword')) fireRegisteredPrimary('sword');
         else if (W.parryWaveReady) {
           W.parryWaveReady = false; W.swing = .3; W.swingV ^= 1; fireWave(true); W.waveCD = 1; W.cdT = .3
         } else { W.down = true; W.holdT = 0; W.chargeReady = W.waveCD <= 0; W.chargeChecked = false }
@@ -915,6 +1224,7 @@
       cam.position.set(P.pos.x, P.eyeY, P.pos.z); const tf = ((W.cur == 2 && W.scope) ? 75 / 1.8 : 75) * (1 - .2 * P.dashFx); cam.fov += (tf - cam.fov) * Math.min(1, dt * 14); cam.updateProjectionMatrix(); muzzle = W.cur == 2 ? rflash : flash; { const as = (W.cur == 2 && W.scope) ? .5 : 0; cam.rotation.set(P.pitch + W.ck + Math.abs(Math.cos(bobT)) * .015 * bobA * as, P.yaw + Math.sin(bobT) * .02 * bobA * as, P.roll, 'YXZ') };
       // weapon state
       W.cdT -= dt; W.waveCD -= dt; W.parryCD = Math.max(0, W.parryCD - dt);
+      W.handgunSkillCD = Math.max(0, W.handgunSkillCD - dt);
       if (W.poisonBurst > 0 && W.cur == 2 && !W.swap) {
         W.poisonBurstT -= dt;
         while (W.poisonBurst > 0 && W.poisonBurstT <= 0) {
@@ -922,7 +1232,12 @@
         }
       }
       if (W.rReload > 0) { W.rReload -= dt; if (W.rReload <= 0) W.rAmmo = rifleAmmoCapacity() }
-      if (W.cur == 2 && !W.swap && W.down && !W.scope) fireRifle(); if (W.reload > 0) { W.reload -= dt; if (W.reload <= 0) W.ammo = 12 }
+      if (W.cur == 0 && !W.swap && W.handgunBurst) {
+        W.handgunBurst.timer -= dt;
+        if (W.handgunBurst.timer <= 0) fireHandgunBurstShot()
+      }
+      if (W.cur == 2 && !W.swap && W.down && !W.scope) fireRifle();
+      if (W.reload > 0) { W.reload -= dt; if (W.reload <= 0) W.ammo = handgunAmmoCapacity() }
       if (W.swing > 0) W.swing -= dt;
       if (W.swap == 1) { W.wOff -= dt * 4; if (W.wOff <= -.7) { W.wOff = -.7; W.cur = W.target; gun.visible = W.cur == 0; sword.visible = W.cur == 1; W.swap = 2 } }
       else if (W.swap == 2) { W.wOff += dt * 4; if (W.wOff >= 0) { W.wOff = 0; W.swap = 0 } }
@@ -939,7 +1254,8 @@
       if (fT > 0) { fT -= dt; if (fT <= 0) { flash.visible = false; fl.intensity = 0; rflash.visible = false; rfl.intensity = 0 } }
       kick *= Math.exp(-dt * 12); W.ck *= Math.exp(-dt * 7);
       {
-        const p = W.reload > 0 ? 1 - W.reload / 1.6 : 0, a = Math.sin(Math.PI * Math.min(1, p));
+        const reloadDuration = handgunReloadDuration();
+        const p = W.reload > 0 ? 1 - W.reload / reloadDuration : 0, a = Math.sin(Math.PI * Math.min(1, p));
         gun.position.set(.28 - a * .08, -.26 + W.wOff - a * .12 + kick * .01, -.55 + kick * .06 + a * .05);
         gun.rotation.set(kick * .22 - a * .55, 0, a * .7);
         mag.visible = !(p > .3 && p < .6); let my = -.22; if (p > 0 && p <= .3) my = -.22 - .3 * (p / .3); else if (p >= .6 && p < .75) my = -.52 + .3 * ((p - .6) / .15); mag.position.y = (p > 0 && p < .75) ? my : -.22;
@@ -1011,7 +1327,7 @@
     }
     function ring(el, p, C, col) { el.style.strokeDashoffset = C * (1 - Math.max(0, Math.min(1, p))); el.style.stroke = col }
     function hudRings() {
-      let rp = -1; if (W.cur == 0 && W.reload > 0) rp = 1 - W.reload / 1.6; else if (W.cur == 2 && W.rReload > 0) rp = 1 - W.rReload / 2.7;
+      let rp = -1; if (W.cur == 0 && W.reload > 0) rp = 1 - W.reload / handgunReloadDuration(); else if (W.cur == 2 && W.rReload > 0) rp = 1 - W.rReload / 2.7;
       $('rr').style.display = rp >= 0 ? 'block' : 'none'; if (rp >= 0) ring($('rrp'), rp, 138.23, '#fff');
       $('rings').style.display = W.cur == 1 ? 'flex' : 'none';
       if (W.cur == 1) {
@@ -1034,14 +1350,23 @@
       const ds = $('dash').children; for (let i = 0; i < 3; i++)ds[i].firstChild.style.width = (i < P.dash ? 100 : i == P.dash ? P.dashTimer / 2.5 * 100 : 0) + '%';
       const cb = $('cb'), bi = cb.firstChild, bs = cb.lastChild; let show = false;
       if (W.cur == 0) {
-        const evolve = WEAPON_ALTERNATES.handgun == 'evolve';
-        $('wn').textContent = 'Handgun : ' + W.ammo + '/12';
-        $('wm').textContent = (evolve ? 'Evolve · ' + (10 + W.evolveBonus) + ' damage · +2 per hit · resets on damage' : 'Buckshot · RMB burst (6)') + (W.reload > 0 ? ' · reloading' : '')
+        const config = handgunConfig();
+        $('wn').textContent = config.name + ' : ' + W.ammo + '/' + config.stats.ammoCapacity;
+        const summaries = {
+          pistol: 'Precise shots build damage · RMB Buckshot',
+          revolver: 'Heavy shots build precision · RMB Precision Round',
+          burstPistol: 'Three-shot bursts build momentum · RMB Overdrive'
+        };
+        $('wm').textContent = summaries[config.id] || config.description;
+        if (W.handgunPassiveStacks > 0) $('wm').textContent += ' · stacks ' + W.handgunPassiveStacks;
+        if (W.handgunSkillCD > 0) $('wm').textContent += ' · skill ' + W.handgunSkillCD.toFixed(1) + 's';
+        if (W.handgunBurst) $('wm').textContent += ' · burst ' + W.handgunBurst.remaining + ' shots';
+        if (W.reload > 0) $('wm').textContent += ' · reloading'
       }
       else if (W.cur == 2) {
         const poison = WEAPON_ALTERNATES.rifle == 'poisonShot';
         $('wn').textContent = 'Rifle : ' + W.rAmmo + '/' + rifleAmmoCapacity();
-        $('wm').textContent = poison ? (W.poisonBurst > 0 ? 'Poison burst · ' + W.poisonBurst + ' shots left' : 'Poison Shot · RMB burst (5) · 50% poison chance') : W.scope ? 'Charged Shot · release RMB to fire' : 'Charged Shot · hold RMB, release to fire';
+        $('wm').textContent = poison ? (W.poisonBurst > 0 ? 'Poison burst · ' + W.poisonBurst + ' shots' : 'Poison Shot · RMB burst') : W.scope ? 'Charged Shot · release RMB to fire' : 'Charged Shot · hold RMB to charge';
         if (W.rReload > 0) $('wm').textContent += ' · reloading'
       }
       else {
@@ -1066,7 +1391,7 @@
     }
     let bobT = 0, bobA = 0; let last = performance.now();
     (function loop(t) { const dt = Math.min((t - last) / 1000, .05); last = t; if (locked) update(dt); R.render(S, cam); requestAnimationFrame(loop) })(last);
-    hud(); $('wn').textContent = 'Handgun : 12/12';
+    hud();
   </script>
 </body>
 
