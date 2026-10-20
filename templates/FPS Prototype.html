@@ -152,6 +152,18 @@
       animation: parryFade 3s ease-out forwards
     }
 
+    #parryIndicator.perfect {
+      color: #ff8cff;
+      font-size: 22px;
+      text-shadow: 0 0 12px #ff45e6, 0 1px 4px #000
+    }
+
+    #parryIndicator.superCritical {
+      color: #ff633d;
+      font-size: 26px;
+      text-shadow: 0 0 16px #ff3b16, 0 1px 4px #000
+    }
+
     @keyframes parryFade {
 
       0%,
@@ -190,6 +202,23 @@
       left: 20px;
       bottom: 20px;
       width: 300px
+    }
+
+    #stamina {
+      display: none;
+      width: 180px;
+      height: 12px;
+      margin-top: 4px;
+      border-color: #ffd36a99
+    }
+
+    #stamina i {
+      background: #e8b94f
+    }
+
+    #stamina span {
+      font-size: 10px;
+      line-height: 12px
     }
 
     .bar {
@@ -435,10 +464,7 @@
           <select id="handgunLoadout"></select>
         </label>
         <label for="swordLoadout">Sword
-          <select id="swordLoadout">
-            <option value="guard">Guard</option>
-            <option value="perfectParry">Perfect Parry</option>
-          </select>
+          <select id="swordLoadout"></select>
         </label>
         <label for="rifleLoadout">Rifle
           <select id="rifleLoadout">
@@ -451,8 +477,9 @@
       <button id="startButton" type="button">Start Game</button>
       <button id="quitButton" type="button">Quit to Main Menu</button>
       <small>WASD move · Mouse look · Shift dash · F interact · 1/2/3 or Q swap · R reload<br>
-        Sword: click to slash · hold left click to charge a wave · right click uses equipped skill<br>
-        Handgun archetypes have unique attacks, passives, and skills · Perfect Parry: 5-frame window, 15s cooldown<br>
+        Defensive Sword: click to slash · hold left click to charge a wave · hold right click to guard<br>
+        Precision Duelist: click to thrust · hold left click to lunge · right click to parry (5 frames, 15s cooldown)<br>
+        Handgun archetypes have unique attacks, passives, and skills<br>
         Poison Shot: 15 rounds, 6 damage · 2 poison damage/stack/s · 50% chance · max stacks deal instant damage</small>
       <div id="sens" onclick="event.stopPropagation()">Sensitivity <input type="range" id="sv" min="0.2" max="3"
           step="0.05" value="1"> <b id="svv">1.00</b></div>
@@ -491,6 +518,7 @@
   </div>
   <div id="hud">
     <div class="bar" id="hp"><i></i><span></span></div>
+    <div class="bar" id="stamina"><i></i><span></span></div>
     <div id="dash">
       <div><i></i></div>
       <div><i></i></div>
@@ -520,7 +548,7 @@
     const orb = new THREE.Mesh(new THREE.SphereGeometry(.4, 24, 16), new THREE.MeshBasicMaterial({ color: 0x44ff88 })); orb.position.set(4, 1.2, -2); S.add(orb);
     orb.add(new THREE.PointLight(0x44ff88, 1.5, 8)); let orbT = 0;
     // ---------- player ----------
-    const P = { pos: new THREE.Vector3(0, 0, 8), yaw: 0, pitch: 0, hp: 200, kx: 0, kz: 0, slowT: 0, dead: false, deadT: 0, roll: 0, eyeY: 1.7, dash: 3, dashTimer: 0, dashT: 0, dashFx: 0, dashDir: new THREE.Vector3() };
+    const P = { pos: new THREE.Vector3(0, 0, 8), yaw: 0, pitch: 0, hp: 200, stamina: 0, kx: 0, kz: 0, slowT: 0, dead: false, deadT: 0, roll: 0, eyeY: 1.7, dash: 3, dashTimer: 0, dashT: 0, dashFx: 0, dashDir: new THREE.Vector3() };
     const PS = 8; const keys = {};
     // ---------- enemies ----------
     const enemies = [], targets = [];
@@ -536,32 +564,97 @@
     }
     mkEnemy(1, -6, -16); mkEnemy(2, 10, -18);
     function hitEnemy(e, dmg, head, source) {
-      if (!e.alive) return; if (source != 'poison') { const n = performance.now(); if (n - W.regT > 60 && W.blockCD <= 0) { W.regT = n; W.blockHP = Math.min(40, W.blockHP + 5) } } if (head) dmg *= 1.3; e.hp -= dmg;
+      if (!e.alive) return;
+      if (source != 'poison' && W.cur == 1 && WEAPON_SELECTIONS.sword == 'defensive') {
+        const lastHit = W.guardHitAt.has(e) ? W.guardHitAt.get(e) : -Infinity;
+        if (W.simTime - lastHit >= SWORD_BALANCE.defensive.guardHitInterval && W.blockCD <= 0) {
+          W.guardHitAt.set(e, W.simTime);
+          W.blockHP = Math.min(SWORD_BALANCE.defensive.guardCapacity, W.blockHP + SWORD_BALANCE.defensive.guardHitRestore)
+        }
+      }
+      if (head && source != 'sword') dmg *= 1.3;
+      e.hp -= dmg;
       const c = $('cross'); c.style.borderColor = head ? '#ff0' : '#f33'; setTimeout(() => c.style.borderColor = '#fff', 100);
       if (e.hp <= 0) { e.hp = 0; e.alive = false; e.g.visible = false; e.rt = e.type == 3 ? 15 : 5; if (e.type == 3) bossClear(e) }
       e.bar.scale.x = Math.max(e.hp / e.max, .001)
     }
     const eProj = [];
     // ---------- hurt ----------
+    const SWORD_BALANCE = {
+      defensive: {
+        damage: 20, fireInterval: .45, guardCapacity: 70, guardStartup: .15, guardCooldown: 10,
+        guardHitRestore: 5, guardHitInterval: .5, healthRegenDelay: 4, healthRegenInterval: 2,
+        healthRegenAmount: 1, retaliationRate: .5, retaliationMax: 35, retaliationExpiry: 8,
+        waveBaseDamage: 30, waveChargeMin: 3, wavePerfectStart: 3, wavePerfectEnd: 3.2,
+        wavePerfectMultiplier: 1.4, waveSpeed: PS * 1.3, waveWidth: 1.6, waveCooldown: 1,
+        slashRange: 4, slashWidth: 1.1, attackStartup: .08, attackRecovery: .34, chargeMax: 5
+      },
+      duelist: {
+        damageMultiplier: .7, fireInterval: .35, movementMultiplier: 1.1, dashMultiplier: 1.5,
+        thrustRange: 3.5, thrustWidth: .28, attackStartup: .07, attackRecovery: .24,
+        weakpointMultiplier: 2, weakpointCriticalChance: .15, criticalMultiplier: 2,
+        lungeMinDistance: 3, lungeMaxDistance: 8, lungeMaxCharge: 1.5, lungeDuration: .3,
+        parryFrames: 5, parryCooldown: 15, maxStamina: 5,
+        riposteBodyMultiplier: 2, riposteWeakpointMultiplier: 2.5,
+        riposteCriticalChance: .35, riposteCriticalMultiplier: 2, perfectRiposteFrames: 5,
+        perfectRiposteBodyMultiplier: 2, superCriticalWeakpointMultiplier: 3
+      }
+    };
     const W = {
       cur: 0, waveCD: 0, rAmmo: 35, rReload: 0, scope: false, scopeCharge: 0, poisonBurst: 0, poisonBurstT: 0,
       ammo: 12, cdT: 0, reload: 0, swap: 0, wOff: 0, target: 0, swing: 0,
-      blocking: false, blockHP: 40, regT: 0, swingV: 1, ck: 0, blockCD: 0, parryCD: 0, parryFrames: 0, parryWaveReady: false,
+      blocking: false, blockHP: SWORD_BALANCE.defensive.guardCapacity, guardStartup: 0, guardBonus: 0, guardBonusT: 0,
+      guardHitAt: new Map(), swingV: 1, ck: 0, blockCD: 0, parryCD: 0, parryFrames: 0, riposteReady: false,
+      perfectRiposteFrames: 0, perfectRiposteFresh: false, perfectWaveCue: 0, swordAttack: null, lunge: null, simTime: 0, lastDamageTime: 0, regenElapsed: 0,
       handgunPassiveStacks: 0, handgunSkillCD: 0, handgunBurst: null,
       holdT: 0, down: false, charging: false, chargeT: 0, chargeReady: false, chargeChecked: false, activeAlt: null
     };
     function hurt(d) {
       if (P.dead) return;
-      if (W.cur == 1 && WEAPON_ALTERNATES.sword == 'perfectParry' && W.parryFrames > 0) {
-        W.parryFrames = 0; W.parryCD = 0; W.parryWaveReady = true; showParryIndicator(); toast('Perfect parry! Next slash fires a wave'); return
+      if (W.cur == 1 && WEAPON_SELECTIONS.sword == 'duelist' && W.parryFrames > 0) {
+        W.parryFrames = 0;
+        W.parryCD = 0;
+        W.riposteReady = true;
+        W.perfectRiposteFrames = SWORD_BALANCE.duelist.perfectRiposteFrames;
+        W.perfectRiposteFresh = true;
+        P.stamina = Math.min(SWORD_BALANCE.duelist.maxStamina, P.stamina + 1);
+        showCombatCue('PERFECT PARRY', true);
+        playCombatTone(880, .12, 'triangle');
+        toast('Perfect parry! Riposte ready');
+        return
       }
-      if (W.cur == 1 && W.blocking) { const a = Math.min(d, W.blockHP); W.blockHP -= a; d -= a; if (W.blockHP <= 0) { W.blocking = false; W.blockCD = 8; toast('Guard broken! 8s cooldown') } }
-      if (W.charging) d *= .9; if (d <= 0) return;
+      const guardWasEffective = W.cur == 1 && W.blocking && W.guardStartup <= 0 && W.blockCD <= 0;
+      if (guardWasEffective) {
+        const absorbed = Math.min(d, W.blockHP);
+        W.blockHP -= absorbed;
+        d -= absorbed;
+        W.guardBonus = Math.min(SWORD_BALANCE.defensive.retaliationMax,
+          W.guardBonus + absorbed * SWORD_BALANCE.defensive.retaliationRate);
+        playCombatTone(220, .06, 'square');
+        if (W.blockHP <= 0) {
+          W.blockHP = 0;
+          W.blocking = false;
+          W.guardStartup = 0;
+          W.blockCD = SWORD_BALANCE.defensive.guardCooldown;
+          if (W.activeAlt == 'guard') W.activeAlt = null;
+          W.guardBonusT = W.guardBonus > 0 ? SWORD_BALANCE.defensive.retaliationExpiry : 0;
+          playCombatTone(110, .2, 'sawtooth');
+          toast('Guard broken! 10s cooldown')
+        }
+      }
+      if (W.cur == 1 && WEAPON_SELECTIONS.sword == 'duelist') {
+        P.stamina = Math.max(0, P.stamina - 1)
+      }
+      if (W.charging && WEAPON_SELECTIONS.sword == 'defensive' && !guardWasEffective) d *= .9; if (d <= 0) return;
       if (W.cur == 0) PASSIVE_MECHANICS[handgunConfig().passive].onDamage();
+      W.lastDamageTime = W.simTime;
+      W.regenElapsed = 0;
       P.hp -= d; const f = $('flash'); f.style.opacity = .5; setTimeout(() => f.style.opacity = 0, 120);
       if (P.hp <= 0) {
         P.hp = 0; P.dead = true; P.deadT = 0; W.down = false; W.charging = false; W.blocking = false; W.scope = false;
         W.handgunBurst = null; W.handgunPassiveStacks = 0; W.handgunSkillCD = 0;
+        resetSwordState(true, true);
+        P.stamina = 0;
         toast('You were defeated')
       }
     }
@@ -571,7 +664,32 @@
       void indicator.offsetWidth;
       indicator.classList.add('show')
     }
+    function showCombatCue(text, perfect, superCritical = false) {
+      const indicator = $('parryIndicator');
+      indicator.textContent = text;
+      indicator.classList.toggle('perfect', perfect);
+      indicator.classList.toggle('superCritical', superCritical);
+      showParryIndicator();
+      setTimeout(() => {
+        indicator.textContent = 'Parry';
+        indicator.classList.remove('perfect', 'superCritical')
+      }, 2600)
+    }
     let tt; function toast(s) { const t = $('toast'); t.textContent = s; t.style.opacity = 1; clearTimeout(tt); tt = setTimeout(() => t.style.opacity = 0, 1600) }
+    let combatAudio;
+    function playCombatTone(frequency, duration, type) {
+      const AudioContextType = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextType) return;
+      if (!combatAudio) combatAudio = new AudioContextType();
+      if (combatAudio.state == 'suspended') combatAudio.resume();
+      const oscillator = combatAudio.createOscillator(), gain = combatAudio.createGain();
+      oscillator.type = type;
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(.07, combatAudio.currentTime);
+      gain.gain.exponentialRampToValueAtTime(.001, combatAudio.currentTime + duration);
+      oscillator.connect(gain); gain.connect(combatAudio.destination);
+      oscillator.start(); oscillator.stop(combatAudio.currentTime + duration)
+    }
     const POISON_DAMAGE_PER_STACK = 2, POISON_PROC_CHANCE = .5;
     function applyPoison(e, stacks, duration) {
       if (!e.alive) return;
@@ -603,6 +721,7 @@
     const fl = new THREE.PointLight(0xffaa33, 0, 6); fl.position.copy(flash.position); gun.add(fl);
     const sword = new THREE.Group(); const blade = new THREE.Mesh(new THREE.BoxGeometry(.05, .9, .015), new THREE.MeshLambertMaterial({ color: 0xdde6ee })); blade.position.y = .55;
     const hilt = new THREE.Mesh(new THREE.BoxGeometry(.04, .18, .04), mat(0x553311)); const guard = new THREE.Mesh(new THREE.BoxGeometry(.2, .03, .05), mat(0xaa8833)); guard.position.y = .1; sword.add(blade, hilt, guard);
+    const rapierBlade = new THREE.Mesh(new THREE.CylinderGeometry(.012, .025, 1.15, 6), mat(0xdde6ee)); rapierBlade.position.y = .65; rapierBlade.visible = false; sword.add(rapierBlade);
     const rifle = new THREE.Group(), bx = (w, h, d, x, y, z, c) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c)); m.position.set(x, y, z); return m };
     const rmag = bx(.05, .16, .08, 0, -.15, -.02, 0x888888);
     const rflash = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffdd55 })); rflash.position.set(0, .01, -.6); rflash.visible = false;
@@ -615,11 +734,20 @@
     let fT = 0, kick = 0;
     function poseSword(dt) {
       if (W.swing <= 0 && sword.rotation.order !== 'XYZ') sword.rotation.setFromQuaternion(sword.quaternion, 'XYZ'); const k = Math.min(1, dt * 14); let t = { x: .35, y: -.4, z: -.6, rx: -.5, rz: -.4 };
-      if (W.blocking) t = { x: .02, y: -.2, z: -.5, rx: -.2, rz: 1.4 }; else if (W.charging) t = { x: .5, y: -.45, z: -.35, rx: .5, rz: -.9 };
+      if (W.blocking || W.guardStartup > 0) t = { x: .02, y: -.2, z: -.5, rx: -.2, rz: 1.4 }; else if (W.charging) t = { x: .5, y: -.45, z: -.35, rx: .5, rz: -.9 };
       const s = W.swing > 0 ? Math.sin(Math.PI * (1 - W.swing / .3)) : 0;
       sword.position.x += (t.x - sword.position.x) * k; sword.position.y += (t.y - sword.position.y) * k; sword.position.z += (t.z - sword.position.z) * k;
       sword.rotation.x += (t.rx - sword.rotation.x) * k; sword.rotation.z += ((t.rz + s * 2.2) - sword.rotation.z) * k; sword.rotation.y *= 1 - k;
-      if (W.swing > 0) { const q = 1 - W.swing / .3, e = q * q * (3 - 2 * q), dr = W.swingV ? -1 : 1; sword.position.set(dr * (.3 - .6 * e) + .1, -.3 - .1 * Math.sin(Math.PI * e), -.55); sword.rotation.set(-Math.PI / 2 + .35 - .7 * e, dr * (-.9 + 1.8 * e), 0, 'YXZ') }
+      if (W.swing > 0 && (W.attackMode == 'thrust' || W.attackMode == 'lunge')) {
+        const duration = W.attackMode == 'lunge' ? SWORD_BALANCE.duelist.lungeDuration : SWORD_BALANCE.duelist.attackRecovery;
+        const q = Math.min(1, 1 - W.swing / duration);
+        sword.position.set(.12, -.28, -.55 - .5 * Math.sin(Math.PI * q));
+        sword.rotation.set(-Math.PI / 2 + .1, 0, 0, 'YXZ')
+      } else if (W.swing > 0 && W.attackMode == 'slash') {
+        const q = Math.min(1, 1 - W.swing / SWORD_BALANCE.defensive.attackRecovery), e = q * q * (3 - 2 * q), dr = W.swingV ? -1 : 1;
+        sword.position.set(dr * (.3 - .6 * e) + .1, -.3 - .1 * Math.sin(Math.PI * e), -.55);
+        sword.rotation.set(-Math.PI / 2 + .35 - .7 * e, dr * (-.9 + 1.8 * e), 0, 'YXZ')
+      }
     }
     // ---------- combat ----------
     const ray = new THREE.Raycaster(); ray.far = 80;
@@ -731,27 +859,233 @@
       }
       W.rAmmo -= cost; fT = .05; rflash.visible = true; rfl.intensity = 3; if (W.rAmmo == 0) toast('Empty - press R')
     }
-    const SWR = 4, slashes = [];
+    const slashes = [];
     function slashFx(v) {
-      const g = new THREE.Group(); g.position.set(P.pos.x, 1.4, P.pos.z); g.rotation.set(0, P.yaw, v ? -.6 : .6, 'YXZ');
-      const mk = (ri, ro, ts, tl, op) => { const m = new THREE.Mesh(new THREE.RingGeometry(ri, ro, 32, 1, ts, tl), new THREE.MeshBasicMaterial({ color: 0xbfe9ff, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false })); m.rotation.x = -Math.PI / 2; return m };
-      const fan = mk(.6, SWR, Math.PI / 6, 2 * Math.PI / 3, .2), piv = new THREE.Group(), arc = mk(SWR * .75, SWR, Math.PI / 2 - Math.PI / 18, Math.PI / 9, .9); piv.add(arc); g.add(fan, piv); S.add(g); slashes.push({ g, fan, arc, piv, t: 0, v })
+      const config = SWORD_BALANCE.defensive;
+      const g = new THREE.Group(), f = fwd();
+      g.position.set(P.pos.x + f.x * 1.2, 1.3, P.pos.z + f.z * 1.2);
+      g.rotation.y = P.yaw;
+      const mk = (ri, ro, ts, tl, op) => {
+        const m = new THREE.Mesh(new THREE.RingGeometry(ri, ro, 32, 1, ts, tl),
+          new THREE.MeshBasicMaterial({ color: 0xbfe9ff, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false }));
+        m.rotation.x = -Math.PI / 2;
+        return m
+      };
+      const fan = mk(.6, config.slashRange, Math.PI / 6, 2 * Math.PI / 3, .2);
+      const piv = new THREE.Group(), arc = mk(config.slashRange * .75, config.slashRange, Math.PI / 2 - Math.PI / 18, Math.PI / 9, .9);
+      piv.add(arc);
+      const points = v
+        ? [new THREE.Vector3(-.9, -.7, 0), new THREE.Vector3(.9, .7, 0)]
+        : [new THREE.Vector3(.9, -.7, 0), new THREE.Vector3(-.9, .7, 0)];
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({ color: 0xc9f4ff, transparent: true, opacity: 1 }));
+      g.add(fan, piv, line); S.add(g); slashes.push({ g, fan, arc, piv, line, t: 0, v })
     }
-    function swingSword() {
-      if (W.cdT > 0) return; W.cdT = .45; W.swing = .3; W.swingV ^= 1; slashFx(W.swingV);
-      const f = fwd(); for (const e of enemies) {
-        if (!e.alive) continue; const dx = e.g.position.x - P.pos.x, dz = e.g.position.z - P.pos.z, d = Math.hypot(dx, dz);
-        if (d < SWR && (dx * f.x + dz * f.z) / (d || 1) > .5) hitEnemy(e, 20, false)
+    function consumeRiposte() {
+      const riposte = W.riposteReady;
+      const perfect = riposte && W.perfectRiposteFrames > 0;
+      if (riposte) {
+        W.riposteReady = false;
+        W.perfectRiposteFrames = 0
+        W.perfectRiposteFresh = false
+      }
+      return { riposte, perfect }
+    }
+    function beginSwordAttack(type, config) {
+      if (W.cur != 1 || W.swap || W.cdT > 0 || P.dead) return;
+      const defensive = config.id == 'defensive';
+      const duel = config.id == 'duelist';
+      if (!defensive && !duel) return;
+      const direction = duel ? aimForward() : fwd();
+      const riposte = duel ? consumeRiposte() : { riposte: false, perfect: false };
+      W.swingV ^= 1;
+      W.swing = defensive ? SWORD_BALANCE.defensive.attackRecovery : SWORD_BALANCE.duelist.attackRecovery;
+      W.attackMode = type;
+      W.swordAttack = {
+        type, t: 0, impacted: false,
+        impactAt: defensive ? SWORD_BALANCE.defensive.attackStartup : SWORD_BALANCE.duelist.attackStartup,
+        direction, origin: P.pos.clone(), hit: new Set(), riposte: riposte.riposte,
+        perfectRiposte: riposte.perfect
+      };
+      W.cdT = config.stats.fireInterval;
+      if (defensive) slashFx(W.swingV)
+    }
+    const swordObstacleRay = new THREE.Raycaster();
+    function swordPathBlocked(origin, target) {
+      const direction = target.clone().sub(origin), distance = direction.length();
+      if (distance <= .05) return false;
+      swordObstacleRay.set(origin, direction.normalize());
+      swordObstacleRay.far = distance;
+      return swordObstacleRay.intersectObjects(obsM, false).length > 0
+    }
+    function findRapierTarget(origin, direction, range, width) {
+      let best = null;
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        const headPosition = new THREE.Vector3(e.g.position.x, 1.9, e.g.position.z);
+        const toHead = headPosition.clone().sub(origin);
+        const headAlong = toHead.dot(direction), headSide = Math.sqrt(Math.max(0, toHead.lengthSq() - headAlong * headAlong));
+        if (headAlong > 0 && headAlong <= range && headSide <= .36 && !swordPathBlocked(origin, headPosition) && (!best || headAlong < best.distance)) {
+          best = { enemy: e, weakpoint: true, distance: headAlong }
+        }
+        const bodyPosition = new THREE.Vector3(e.g.position.x, .8, e.g.position.z);
+        const toBody = bodyPosition.clone().sub(origin);
+        const bodyAlong = toBody.dot(direction), bodySide = Math.sqrt(Math.max(0, toBody.lengthSq() - bodyAlong * bodyAlong));
+        if (bodyAlong > 0 && bodyAlong <= range && bodySide <= width + .78 && !swordPathBlocked(origin, bodyPosition) && (!best || bodyAlong < best.distance)) {
+          best = { enemy: e, weakpoint: false, distance: bodyAlong }
+        }
+      }
+      return best
+    }
+    function calculateDuelistDamage(weakpoint, riposte, perfectRiposte, random = Math.random) {
+      const balance = SWORD_BALANCE.duelist;
+      const bodyDamage = SWORD_BALANCE.defensive.damage * balance.damageMultiplier;
+      const weakpointDamage = bodyDamage * balance.weakpointMultiplier;
+      if (perfectRiposte) {
+        return {
+          damage: weakpoint ? weakpointDamage * balance.superCriticalWeakpointMultiplier : weakpointDamage * balance.perfectRiposteBodyMultiplier,
+          outcome: weakpoint ? 'Super Critical' : 'Perfect Riposte'
+        }
+      }
+      if (riposte && weakpoint) {
+        const critical = random() < balance.riposteCriticalChance;
+        return { damage: bodyDamage * balance.riposteWeakpointMultiplier * (critical ? balance.riposteCriticalMultiplier : 1), outcome: critical ? 'Riposte Critical' : 'Riposte Weak Point' }
+      }
+      if (riposte) return { damage: bodyDamage * balance.riposteBodyMultiplier, outcome: 'Riposte' };
+      if (weakpoint) {
+        const critical = random() < balance.weakpointCriticalChance;
+        return { damage: weakpointDamage * (critical ? balance.criticalMultiplier : 1), outcome: critical ? 'Critical Weak Point' : 'Weak Point' }
+      }
+      return { damage: bodyDamage, outcome: 'Body Hit' }
+    }
+    function applyRapierHit(enemy, weakpoint, riposte, perfectRiposte) {
+      const result = calculateDuelistDamage(weakpoint, riposte, perfectRiposte);
+      const doubleRiposte = riposte && P.stamina >= SWORD_BALANCE.duelist.maxStamina;
+      hitEnemy(enemy, result.damage, weakpoint, 'sword');
+      if (doubleRiposte) hitEnemy(enemy, result.damage, weakpoint, 'sword');
+      const perfect = result.outcome == 'Perfect Riposte' || result.outcome == 'Super Critical';
+      const superCritical = result.outcome == 'Super Critical';
+      showCombatCue((doubleRiposte ? 'DOUBLE RIPOSTE · ' : '') + result.outcome, perfect, superCritical);
+      playCombatTone(doubleRiposte ? 1320 : superCritical ? 1220 : perfect ? 980 : result.outcome.includes('Critical') ? 760 : weakpoint ? 620 : 390, .12, 'triangle')
+    }
+    function resolveSwordAttack(attack) {
+      if (attack.impacted || W.cur != 1 || W.swap || P.dead) return;
+      attack.impacted = true;
+      if (attack.type == 'slash') {
+        const config = SWORD_BALANCE.defensive, f = attack.direction;
+        for (const e of enemies) {
+          if (!e.alive || attack.hit.has(e)) continue;
+          const dx = e.g.position.x - attack.origin.x, dz = e.g.position.z - attack.origin.z, d = Math.hypot(dx, dz);
+          const forward = (dx * f.x + dz * f.z) / (d || 1), side = Math.abs(dx * -f.z + dz * f.x);
+          const slashOrigin = new THREE.Vector3(attack.origin.x, 1.3, attack.origin.z);
+          const slashTarget = new THREE.Vector3(e.g.position.x, 1.3, e.g.position.z);
+          if (d <= config.slashRange && forward > .25 && side <= config.slashWidth + .4 && !swordPathBlocked(slashOrigin, slashTarget)) {
+            attack.hit.add(e);
+            hitEnemy(e, config.damage, false, 'sword')
+          }
+        }
+        return
+      }
+      const origin = new THREE.Vector3(attack.origin.x, P.eyeY, attack.origin.z);
+      const target = findRapierTarget(origin, attack.direction, SWORD_BALANCE.duelist.thrustRange, SWORD_BALANCE.duelist.thrustWidth);
+      if (target) applyRapierHit(target.enemy, target.weakpoint, attack.riposte, attack.perfectRiposte);
+      else if (attack.riposte) toast('Riposte missed')
+    }
+    function endGuard(cancel) {
+      const wasGuarding = W.blocking || W.guardStartup > 0;
+      W.blocking = false;
+      W.guardStartup = 0;
+      if (wasGuarding && W.guardBonus > 0) W.guardBonusT = SWORD_BALANCE.defensive.retaliationExpiry;
+      if (cancel && W.guardBonusT <= 0) W.guardBonus = 0
+    }
+    function resetSwordState(clearCapacity, resetCooldowns = false, preserveHitLimit = false) {
+      W.blocking = false; W.guardStartup = 0; W.guardBonus = 0; W.guardBonusT = 0;
+      W.blockHP = clearCapacity ? SWORD_BALANCE.defensive.guardCapacity : Math.min(W.blockHP, SWORD_BALANCE.defensive.guardCapacity);
+      if (!preserveHitLimit) W.guardHitAt.clear();
+      if (resetCooldowns) { W.blockCD = 0; W.parryCD = 0 }
+      W.parryFrames = 0; W.riposteReady = false; W.perfectRiposteFrames = 0; W.perfectRiposteFresh = false;
+      W.swordAttack = null; W.lunge = null; W.charging = false; W.chargeT = 0; W.down = false;
+      W.holdT = 0; W.chargeReady = false; W.chargeChecked = false; P.dashFx = 0;
+      W.swing = 0; W.activeAlt = null;
+      W.lastDamageTime = W.simTime; W.regenElapsed = 0;
+      W.perfectWaveCue = 0;
+    }
+    function startLunge(chargeTime) {
+      const config = SWORD_BALANCE.duelist;
+      const ratio = Math.max(0, Math.min(1, chargeTime / config.lungeMaxCharge));
+      const riposte = consumeRiposte();
+      const forward = fwd();
+      W.lunge = {
+        t: 0, duration: config.lungeDuration,
+        distance: config.lungeMinDistance + (config.lungeMaxDistance - config.lungeMinDistance) * ratio,
+        direction: forward, hit: new Set(), riposte: riposte.riposte, perfectRiposte: riposte.perfect
+      };
+      W.cdT = selectedArchetype('sword').stats.fireInterval;
+      W.swing = config.lungeDuration;
+      W.attackMode = 'lunge';
+      P.dashFx = 1;
+      playCombatTone(340, .1, 'sawtooth');
+      toast('Lunge!')
+    }
+    function updateLunge(dt) {
+      const lunge = W.lunge;
+      if (!lunge || W.cur != 1 || WEAPON_SELECTIONS.sword != 'duelist') return;
+      const step = Math.min(dt, lunge.duration - lunge.t);
+      const remaining = lunge.distance * step / lunge.duration;
+      const pieces = Math.max(1, Math.ceil(remaining / .08));
+      const pieceDistance = remaining / pieces;
+      for (let i = 0; i < pieces; i++) {
+        const beforeX = P.pos.x, beforeZ = P.pos.z;
+        P.pos.x += lunge.direction.x * pieceDistance;
+        P.pos.z += lunge.direction.z * pieceDistance;
+        P.pos.x = Math.max(-48, Math.min(48, P.pos.x));
+        P.pos.z = Math.max(-48, Math.min(48, P.pos.z));
+        collide(P.pos);
+        if (Math.hypot(P.pos.x - beforeX, P.pos.z - beforeZ) < .001) break;
+        const origin = new THREE.Vector3(P.pos.x, P.eyeY, P.pos.z);
+        const target = findRapierTarget(origin, lunge.direction, .95, .5);
+        if (target && !lunge.hit.has(target.enemy)) {
+          lunge.hit.add(target.enemy);
+          const isRiposteHit = lunge.riposte;
+          applyRapierHit(target.enemy, target.weakpoint, isRiposteHit, lunge.perfectRiposte);
+          lunge.riposte = false
+        }
+      }
+      lunge.t += step;
+      if (lunge.t >= lunge.duration) {
+        if (lunge.riposte) toast('Riposte missed');
+        W.lunge = null
       }
     }
     const waves = [];
-    function fireWave(instant = false) {
-      const perfect = instant || W.chargeT >= 3 && W.chargeT <= 3.2; const f = fwd();
-      const g = new THREE.Group(), c = new THREE.Mesh(new THREE.TorusGeometry(1, .07, 6, 20, Math.PI), new THREE.MeshBasicMaterial({ color: perfect ? 0xffdd00 : 0xffffff }));
-      c.rotation.x = -Math.PI / 2; g.add(c); g.rotation.y = P.yaw; if (perfect) g.scale.set(1.4, 1, 1.4); g.position.set(P.pos.x + f.x, 1.1, P.pos.z + f.z); S.add(g);
-      waves.push({ g, v: f.clone().multiplyScalar(PS * 1.3 * (perfect ? 1.4 : 1)), dmg: perfect ? 42 : 30, life: 0, hit: new Set(), hr: perfect ? 2.24 : 1.6 })
+    function fireWave() {
+      const config = SWORD_BALANCE.defensive;
+      const perfect = W.chargeT >= config.wavePerfectStart && W.chargeT <= config.wavePerfectEnd;
+      const multiplier = perfect ? config.wavePerfectMultiplier : 1;
+      const f = fwd(), bonus = W.guardBonus;
+      W.guardBonus = 0; W.guardBonusT = 0;
+      const g = new THREE.Group(), c = new THREE.Mesh(new THREE.TorusGeometry(config.waveWidth, .07, 6, 20, Math.PI),
+        new THREE.MeshBasicMaterial({ color: perfect ? 0xffdd00 : 0xffffff }));
+      c.rotation.x = -Math.PI / 2; g.add(c); g.rotation.y = P.yaw;
+      g.scale.set(multiplier, 1, multiplier);
+      g.position.set(P.pos.x + f.x, 1.1, P.pos.z + f.z); S.add(g);
+      waves.push({
+        g, v: f.clone().multiplyScalar(config.waveSpeed * multiplier),
+        dmg: config.waveBaseDamage * multiplier + bonus, baseDamage: config.waveBaseDamage * multiplier,
+        retaliationBonus: bonus, life: 0, hit: new Set(), hr: config.waveWidth * multiplier,
+        perfect
+      });
+      if (perfect) {
+        W.perfectWaveCue = .55;
+        playCombatTone(990, .16, 'triangle');
+        toast('Perfect Wave' + (bonus ? ' · Retaliation +' + bonus : ''))
+      } else if (bonus) toast('Retaliation +' + bonus)
     }
     function fwd() { return new THREE.Vector3(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)) }
+    function aimForward() {
+      return new THREE.Vector3(-Math.sin(P.yaw) * Math.cos(P.pitch), Math.sin(P.pitch),
+        -Math.cos(P.yaw) * Math.cos(P.pitch)).normalize()
+    }
     function rifleAmmoCapacity() { return WEAPON_ALTERNATES.rifle == 'poisonShot' ? 15 : 35 }
     function handgunAmmoCapacity() { return handgunConfig().stats.ammoCapacity }
     function handgunReloadDuration() { return handgunConfig().stats.reloadDuration }
@@ -763,14 +1097,13 @@
         W.handgunBurst = null; W.reload = handgunReloadDuration(); toast('Reloading...')
       }
     }
-    const WEAPON_ALTERNATES = { sword: 'guard', rifle: 'chargedShot' };
+    const WEAPON_ALTERNATES = { rifle: 'chargedShot' };
     function setLoadout() {
       if (started) {
         for (const weaponId of Object.keys(WEAPON_DEFINITIONS)) {
           const selector = $(archetypeSelectorId(weaponId));
           if (selector && WEAPON_SELECTIONS[weaponId]) selector.value = WEAPON_SELECTIONS[weaponId]
         }
-        $('swordLoadout').value = WEAPON_ALTERNATES.sword;
         $('rifleLoadout').value = WEAPON_ALTERNATES.rifle;
         toast('Change loadouts from the main menu');
         return false
@@ -787,8 +1120,9 @@
         }
         selectedArchetypes[weaponId] = selector.value
       }
-      const swordAlt = $('swordLoadout').value, rifleAlt = $('rifleLoadout').value;
-      const swordChanged = swordAlt != WEAPON_ALTERNATES.sword, rifleChanged = rifleAlt != WEAPON_ALTERNATES.rifle;
+      const swordChanged = selectedArchetypes.sword != WEAPON_SELECTIONS.sword;
+      const rifleAlt = $('rifleLoadout').value;
+      const rifleChanged = rifleAlt != WEAPON_ALTERNATES.rifle;
       deactivateAlternate(true);
       for (const [weaponId, selected] of Object.entries(selectedArchetypes)) {
         if (selected != WEAPON_SELECTIONS[weaponId]) {
@@ -802,15 +1136,12 @@
           }
         }
       }
-      WEAPON_ALTERNATES.sword = swordAlt; WEAPON_ALTERNATES.rifle = rifleAlt;
+      WEAPON_ALTERNATES.rifle = rifleAlt;
+      if (swordChanged) resetSwordState(true);
       if (rifleChanged) {
         W.rAmmo = Math.min(W.rAmmo, rifleAmmoCapacity());
         W.rReload = 0; W.poisonBurst = 0; W.scope = false; W.scopeCharge = 0
       }
-      W.parryCD = 0;
-      W.parryFrames = 0;
-      W.parryWaveReady = false;
-      if (swordChanged) { W.parryFrames = 0; W.parryWaveReady = false }
       W.blocking = false;
       updateHandgunDetails();
       return true
@@ -828,11 +1159,22 @@
         validate: stats => stats.passiveDamagePerStack >= 0 && stats.skillBurstCount > 0 && stats.skillSpread >= 0 && stats.skillDamage >= 0 && stats.skillDamagePerStack >= 0 && stats.burstInterval > 0 && stats.skillCooldown > 0,
         start: () => fireBurstSkill()
       },
-      guard: { start: () => { if (W.blockCD > 0) { toast('Guard on cooldown'); return false } W.blocking = true }, end: () => { W.blocking = false } },
-      perfectParry: {
+      guard: {
         start: () => {
-          if (W.parryCD > 0) { toast('Perfect Parry cooldown ' + W.parryCD.toFixed(1) + 's'); return false }
-          W.parryCD = 15; W.parryFrames = 5; toast('Perfect Parry ready')
+          if (W.blockCD > 0) { toast('Guard on cooldown'); return false }
+          W.blocking = false;
+          W.guardBonusT = 0;
+          W.guardStartup = SWORD_BALANCE.defensive.guardStartup
+        },
+        end: cancel => endGuard(cancel)
+      },
+      duelistParry: {
+        start: () => {
+          if (W.parryCD > 0) { toast('Parry cooldown ' + W.parryCD.toFixed(1) + 's'); return false }
+          W.parryCD = SWORD_BALANCE.duelist.parryCooldown;
+          W.parryFrames = SWORD_BALANCE.duelist.parryFrames;
+          playCombatTone(520, .08, 'triangle');
+          toast('Parry!')
         }
       },
       chargedShot: {
@@ -862,7 +1204,7 @@
       WEAPON_DEFINITIONS[definition.id] = definition
     }
     registerWeaponDefinition({ id: 'handgun', name: 'Handgun', defaultArchetype: 'pistol', archetypes: {} });
-    registerWeaponDefinition({ id: 'sword', name: 'Sword', defaultArchetype: null, archetypes: {} });
+    registerWeaponDefinition({ id: 'sword', name: 'Sword', defaultArchetype: 'defensive', archetypes: {} });
     registerWeaponDefinition({ id: 'rifle', name: 'Rifle', defaultArchetype: null, archetypes: {} });
     const WEAPON_SELECTIONS = { handgun: 'pistol', sword: null, rifle: null };
     const PRIMARY_ATTACKS = {
@@ -870,7 +1212,9 @@
       burst: {
         validate: stats => stats.burstCount > 0 && stats.burstSpread >= 0 && stats.burstInterval > 0 && stats.kick >= 0,
         fire: config => startHandgunBurst(config, config.stats.burstCount, config.stats.burstSpread, config.stats.damage, config.stats.burstInterval, config.stats.fireInterval)
-      }
+      },
+      swordSlash: { fire: config => beginSwordAttack('slash', config) },
+      rapierThrust: { fire: config => beginSwordAttack('thrust', config) }
     };
     function fireHandgunPrimary() {
       if (!fireRegisteredPrimary('handgun')) throw new Error('No handgun archetype is selected')
@@ -893,6 +1237,18 @@
         onHit: () => { W.handgunPassiveStacks = Math.min(6, W.handgunPassiveStacks + 1) },
         onMiss: () => { W.handgunPassiveStacks = 0 },
         onDamage: () => { W.handgunPassiveStacks = 0 }
+      },
+      battleHardened: {
+        damageBonus: () => 0,
+        onHit: () => {},
+        onMiss: () => {},
+        onDamage: () => {}
+      },
+      duelistFootwork: {
+        damageBonus: () => 0,
+        onHit: () => {},
+        onMiss: () => {},
+        onDamage: () => {}
       }
     };
     function registerArchetype(weaponId, archetype) {
@@ -957,6 +1313,28 @@
         }
       }
     ].forEach(archetype => registerArchetype('handgun', archetype));
+    [
+      {
+        id: 'defensive', name: 'Defensive', description: 'A durable sword fighter who turns absorbed damage into a retaliatory wave.',
+        primary: 'swordSlash', passive: 'battleHardened', skill: 'guard',
+        primaryDescription: 'Alternating heavy cross slashes · 20 damage',
+        passiveDescription: 'Battle Hardened: regenerate 1 HP every 2s after 4s without health damage.',
+        skillDescription: 'Guard: 70 capacity after a 0.15s startup; breaks for 10s when depleted.',
+        strengths: 'Sustained defense, health recovery, and empowered charged waves.',
+        weaknesses: 'Slower broad attacks and a short guard startup.',
+        stats: { damage: SWORD_BALANCE.defensive.damage, fireInterval: SWORD_BALANCE.defensive.fireInterval }
+      },
+      {
+        id: 'duelist', name: 'Precision Duelist', description: 'A mobile rapier specialist built around weak points and counterattacks.',
+        primary: 'rapierThrust', passive: 'duelistFootwork', skill: 'duelistParry',
+        primaryDescription: 'Narrow thrust · 70% Defensive damage; weak points deal 2x body damage.',
+        passiveDescription: 'Duelist’s Footwork: 10% faster movement and 1.5x dash distance.',
+        skillDescription: 'Parry: a 5-simulation-frame perfect window; successful parries grant a riposte.',
+        strengths: 'Fast movement, precision weak-point damage, and powerful ripostes.',
+        weaknesses: 'Narrow attacks demand accurate aim; no sword wave or guard.',
+        stats: { damage: SWORD_BALANCE.defensive.damage * SWORD_BALANCE.duelist.damageMultiplier, fireInterval: SWORD_BALANCE.duelist.fireInterval }
+      }
+    ].forEach(archetype => registerArchetype('sword', archetype));
     function getArchetype(weaponId, archetypeId) {
       const archetype = WEAPON_DEFINITIONS[weaponId] && WEAPON_DEFINITIONS[weaponId].archetypes[archetypeId];
       if (!archetype) throw new Error('Unknown ' + weaponId + ' archetype: ' + archetypeId);
@@ -975,7 +1353,7 @@
       ].join('\n')
     }
     function archetypeSelectorId(weaponId) {
-      return weaponId == 'handgun' ? 'handgunLoadout' : weaponId + 'ArchetypeLoadout'
+      return weaponId == 'handgun' ? 'handgunLoadout' : weaponId == 'sword' ? 'swordLoadout' : weaponId + 'ArchetypeLoadout'
     }
     function populateArchetypeSelectors() {
       for (const weapon of Object.values(WEAPON_DEFINITIONS)) {
@@ -1039,7 +1417,9 @@
     function swapTo(i) {
       if (W.cur == i || W.swap) return;
       if (W.cur == 0) W.handgunBurst = null;
-      deactivateAlternate(true); W.swap = 1; W.target = i; W.blocking = false; W.charging = false; W.down = false; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0; W.parryFrames = 0;
+      deactivateAlternate(true);
+      resetSwordState(false, false, true);
+      W.swap = 1; W.target = i; W.blocking = false; W.charging = false; W.down = false; W.scope = false; W.scopeCharge = 0; W.poisonBurst = 0;
       if (W.reload > 0 || W.rReload > 0) toast('Reload cancelled'); W.reload = 0; W.rReload = 0
     }
     // ---------- input ----------
@@ -1057,9 +1437,6 @@
     }
     function beginGame() {
       if (!started && !setLoadout()) return;
-      W.parryCD = 0;
-      W.parryFrames = 0;
-      W.parryWaveReady = false;
       started = true;
       $('levelName').textContent = $('levelSelect').selectedOptions[0].textContent;
       R.domElement.requestPointerLock()
@@ -1067,7 +1444,7 @@
     $('startButton').onclick = beginGame;
     $('quitButton').onclick = () => {
       started = false; deactivateAlternate(true); W.down = false; W.charging = false; W.chargeT = 0;
-      W.blocking = false; W.poisonBurst = 0; W.parryCD = 0; W.parryFrames = 0; W.parryWaveReady = false;
+      W.blocking = false; W.poisonBurst = 0; resetSwordState(true, true); P.stamina = 0;
       W.handgunBurst = null; W.handgunPassiveStacks = 0; W.handgunSkillCD = 0;
       updateMenu()
     };
@@ -1086,10 +1463,11 @@
       if (e.button == 0) {
         if (W.cur == 0) fireHandgunPrimary();
         else if (W.cur == 2) W.down = true;
-        else if (selectedArchetype('sword')) fireRegisteredPrimary('sword');
-        else if (W.parryWaveReady) {
-          W.parryWaveReady = false; W.swing = .3; W.swingV ^= 1; fireWave(true); W.waveCD = 1; W.cdT = .3
-        } else { W.down = true; W.holdT = 0; W.chargeReady = W.waveCD <= 0; W.chargeChecked = false }
+        else {
+          W.down = true; W.holdT = 0;
+          W.chargeReady = W.cdT <= 0 && (WEAPON_SELECTIONS.sword == 'duelist' || W.waveCD <= 0);
+          W.chargeChecked = false
+        }
       }
       if (e.button == 2) activateAlternate()
     });
@@ -1099,9 +1477,15 @@
       if (e.button != 0 || W.cur != 1 || !W.down) return;
       W.down = false;
       if (W.charging) {
-        if (W.chargeT >= 3) fireWave();
-        W.waveCD = 1; W.charging = false; W.chargeT = 0; W.cdT = .3
-      } else if (W.holdT < .15) swingSword()
+        if (WEAPON_SELECTIONS.sword == 'defensive') {
+          if (W.chargeT >= SWORD_BALANCE.defensive.waveChargeMin) {
+            fireWave();
+            W.waveCD = SWORD_BALANCE.defensive.waveCooldown;
+            W.cdT = .3
+          }
+        } else if (WEAPON_SELECTIONS.sword == 'duelist') startLunge(W.chargeT);
+        W.charging = false; W.chargeT = 0
+      } else if (W.holdT < .15) fireRegisteredPrimary('sword')
     });
     addEventListener('keydown', e => {
       if (e.repeat) return; keys[e.code] = true; if (!locked || P.dead) return;
@@ -1204,17 +1588,32 @@
     mkBoss(0, -34);
     // ---------- update ----------
     function update(dt) {
+      W.simTime += dt;
       if (P.dead) {
         P.deadT += dt; const k = Math.min(1, P.deadT), e = k * k * (3 - 2 * k); P.roll = e * 80 * Math.PI / 180; P.eyeY = 1.7 - e * 1.2; $('flash').style.opacity = .15 + .3 * e;
-        if (P.deadT >= 2.5) { P.dead = false; P.hp = 200; P.pos.set(0, 0, 8); P.roll = 0; P.eyeY = 1.7; $('flash').style.opacity = 0; toast('Respawned') }
+        if (P.deadT >= 2.5) { P.dead = false; P.hp = 200; P.pos.set(0, 0, 8); P.roll = 0; P.eyeY = 1.7; resetSwordState(true, true); P.stamina = 0; $('flash').style.opacity = 0; toast('Respawned') }
       }
       // movement
-      let sp = PS * (W.charging ? .3 : 1) * (W.cur == 2 && W.scope ? .5 : 1) * (P.slowT > 0 ? .5 : 1); const d = inDir();
+      const duelist = W.cur == 1 && WEAPON_SELECTIONS.sword == 'duelist';
+      let sp = PS * (duelist ? SWORD_BALANCE.duelist.movementMultiplier : 1) * (W.charging ? .3 : 1) * (W.cur == 2 && W.scope ? .5 : 1) * (P.slowT > 0 ? .5 : 1);
+      const d = W.lunge ? new THREE.Vector3() : inDir();
       P.pos.addScaledVector(d, sp * dt);
       P.pos.x += P.kx * dt; P.pos.z += P.kz * dt; P.kx *= Math.exp(-dt * 6); P.kz *= Math.exp(-dt * 6); P.slowT -= dt;
       const mv = d.lengthSq() > 0 && P.dashT <= 0; bobA += ((mv ? 1 : 0) - bobA) * Math.min(1, dt * 10); if (mv) bobT += dt * 10 * (sp / PS);
-      if (P.dashT > 0) { const s = Math.min(dt, P.dashT); P.pos.addScaledVector(P.dashDir, 5 / .12 * s); P.dashT -= s }
+      if (P.dashT > 0) {
+        const s = Math.min(dt, P.dashT), dashDistance = 5 * (duelist ? SWORD_BALANCE.duelist.dashMultiplier : 1) * s / .12;
+        const pieces = Math.max(1, Math.ceil(dashDistance / .08));
+        for (let i = 0; i < pieces; i++) {
+          const x = P.pos.x, z = P.pos.z;
+          P.pos.addScaledVector(P.dashDir, dashDistance / pieces);
+          P.pos.x = Math.max(-48, Math.min(48, P.pos.x)); P.pos.z = Math.max(-48, Math.min(48, P.pos.z));
+          collide(P.pos);
+          if (Math.hypot(P.pos.x - x, P.pos.z - z) < .001) break
+        }
+        P.dashT -= s
+      }
       P.pos.x = Math.max(-48, Math.min(48, P.pos.x)); P.pos.z = Math.max(-48, Math.min(48, P.pos.z)); collide(P.pos);
+      updateLunge(dt);
       if (P.dash < 3) { P.dashTimer += dt; if (P.dashTimer >= 2.5) { P.dash++; P.dashTimer = 0 } }
       if (W.cur == 2 && W.scope) W.scopeCharge = Math.min(2, W.scopeCharge + dt)
       if (P.dashT > 0) P.dashFx = 1; else P.dashFx = Math.max(0, P.dashFx - dt * 3.5);
@@ -1223,7 +1622,38 @@
       }
       cam.position.set(P.pos.x, P.eyeY, P.pos.z); const tf = ((W.cur == 2 && W.scope) ? 75 / 1.8 : 75) * (1 - .2 * P.dashFx); cam.fov += (tf - cam.fov) * Math.min(1, dt * 14); cam.updateProjectionMatrix(); muzzle = W.cur == 2 ? rflash : flash; { const as = (W.cur == 2 && W.scope) ? .5 : 0; cam.rotation.set(P.pitch + W.ck + Math.abs(Math.cos(bobT)) * .015 * bobA * as, P.yaw + Math.sin(bobT) * .02 * bobA * as, P.roll, 'YXZ') };
       // weapon state
-      W.cdT -= dt; W.waveCD -= dt; W.parryCD = Math.max(0, W.parryCD - dt);
+      W.cdT = Math.max(0, W.cdT - dt); W.waveCD = Math.max(0, W.waveCD - dt); W.parryCD = Math.max(0, W.parryCD - dt);
+      if (W.cdT < 1e-9) W.cdT = 0;
+      if (W.waveCD < 1e-9) W.waveCD = 0;
+      if (W.parryCD < 1e-9) W.parryCD = 0;
+      if (W.blockCD > 0) {
+        W.blockCD = Math.max(0, W.blockCD - dt);
+        if (W.blockCD < 1e-9) W.blockCD = 0;
+        if (W.blockCD == 0) W.blockHP = SWORD_BALANCE.defensive.guardCapacity
+      }
+      if (W.cur == 1 && WEAPON_SELECTIONS.sword == 'defensive') {
+        if (W.guardStartup > 0) {
+          W.guardStartup = Math.max(0, W.guardStartup - dt);
+          if (W.guardStartup < 1e-9) W.guardStartup = 0;
+          if (W.guardStartup == 0 && W.activeAlt == 'guard' && W.blockCD <= 0) {
+            W.blocking = true;
+            playCombatTone(300, .08, 'square')
+          }
+        }
+        if (W.guardBonusT > 0) {
+          W.guardBonusT = Math.max(0, W.guardBonusT - dt);
+          if (W.guardBonusT < 1e-9) W.guardBonusT = 0;
+          if (W.guardBonusT == 0) W.guardBonus = 0
+        }
+        if (W.simTime - W.lastDamageTime >= SWORD_BALANCE.defensive.healthRegenDelay && P.hp < 200) {
+          W.regenElapsed += dt;
+          while (W.regenElapsed + 1e-9 >= SWORD_BALANCE.defensive.healthRegenInterval && P.hp < 200) {
+            P.hp = Math.min(200, P.hp + SWORD_BALANCE.defensive.healthRegenAmount);
+            W.regenElapsed = Math.max(0, W.regenElapsed - SWORD_BALANCE.defensive.healthRegenInterval)
+          }
+        } else W.regenElapsed = 0
+      } else W.regenElapsed = 0;
+      W.perfectWaveCue = Math.max(0, W.perfectWaveCue - dt);
       W.handgunSkillCD = Math.max(0, W.handgunSkillCD - dt);
       if (W.poisonBurst > 0 && W.cur == 2 && !W.swap) {
         W.poisonBurstT -= dt;
@@ -1248,9 +1678,18 @@
           if (W.chargeReady) { W.charging = true; W.chargeT = 0 }
           else if (W.waveCD > 0) toast('Wave on cooldown')
         }
-        if (W.charging) W.chargeT = Math.min(W.chargeT + dt, 5)
+        if (W.charging) {
+          const maxCharge = WEAPON_SELECTIONS.sword == 'duelist'
+            ? SWORD_BALANCE.duelist.lungeMaxCharge : SWORD_BALANCE.defensive.chargeMax;
+          W.chargeT = Math.min(W.chargeT + dt, maxCharge)
+        }
       }
-      if (W.blockCD > 0) { W.blockCD -= dt; if (W.blockCD <= 0) W.blockHP = 40 }
+      if (W.swordAttack) {
+        W.swordAttack.t += dt;
+        if (!W.swordAttack.impacted && W.swordAttack.t >= W.swordAttack.impactAt) resolveSwordAttack(W.swordAttack);
+        const recovery = W.attackMode == 'slash' ? SWORD_BALANCE.defensive.attackRecovery : SWORD_BALANCE.duelist.attackRecovery;
+        if (W.swordAttack.t >= recovery) W.swordAttack = null
+      }
       if (fT > 0) { fT -= dt; if (fT <= 0) { flash.visible = false; fl.intensity = 0; rflash.visible = false; rfl.intensity = 0 } }
       kick *= Math.exp(-dt * 12); W.ck *= Math.exp(-dt * 7);
       {
@@ -1268,7 +1707,10 @@
         rifle.visible = W.cur == 2 && !W.scope
       }
       poseSword(dt);
-      { const pf = W.cur == 1 && W.charging && W.chargeT >= 3 && W.chargeT <= 3.2; star.visible = pf; if (pf) { star.material.rotation += dt * 6; const z = .3 + .1 * Math.sin(performance.now() / 40); star.scale.set(z, z, 1) } } view.position.y = W.cur == 1 ? W.wOff : 0; if (W.cur == 0) view.position.y = 0;
+      const duelistStance = W.cur == 1 && WEAPON_SELECTIONS.sword == 'duelist';
+      blade.visible = !duelistStance;
+      rapierBlade.visible = duelistStance;
+      { const pf = W.cur == 1 && ((WEAPON_SELECTIONS.sword == 'defensive' && W.charging && W.chargeT >= SWORD_BALANCE.defensive.wavePerfectStart && W.chargeT <= SWORD_BALANCE.defensive.wavePerfectEnd) || W.perfectWaveCue > 0); star.visible = pf; if (pf) { star.material.rotation += dt * 6; const z = .3 + .1 * Math.sin(performance.now() / 40); star.scale.set(z, z, 1) } } view.position.y = W.cur == 1 ? W.wOff : 0; if (W.cur == 0) view.position.y = 0;
       if (W.cur == 1) sword.position.y += W.wOff * 0;
       if (W.swap && W.cur == 1) view.position.y = W.wOff;
       view.position.x = Math.sin(bobT) * .012 * bobA; view.position.y -= Math.abs(Math.cos(bobT)) * .014 * bobA; view.rotation.z = Math.sin(bobT) * .012 * bobA;
@@ -1276,12 +1718,19 @@
       for (let i = waves.length - 1; i >= 0; i--) {
         const w = waves[i]; w.g.position.addScaledVector(w.v, dt); w.life += dt;
         for (const e of enemies) { if (e.alive && !w.hit.has(e) && Math.hypot(e.g.position.x - w.g.position.x, e.g.position.z - w.g.position.z) < w.hr) { w.hit.add(e); hitEnemy(e, w.dmg, false) } }
-        if (w.life > 3.2 || Math.abs(w.g.position.x) > 49 || Math.abs(w.g.position.z) > 49) { S.remove(w.g); waves.splice(i, 1) }
+        if (w.life > 3.2 || Math.abs(w.g.position.x) > 49 || Math.abs(w.g.position.z) > 49) {
+          S.remove(w.g);
+          w.g.traverse(object => {
+            if (object.geometry) object.geometry.dispose();
+            if (object.material) object.material.dispose()
+          });
+          waves.splice(i, 1)
+        }
       }
       for (let i = tracers.length - 1; i >= 0; i--) { const t = tracers[i]; t.t -= dt; t.m.material.opacity = Math.max(0, t.t / .15); if (t.t <= 0) { S.remove(t.m); t.m.geometry.dispose(); t.m.material.dispose(); tracers.splice(i, 1) } }
       for (let i = slashes.length - 1; i >= 0; i--) {
-        const f = slashes[i]; f.t += dt; const k = f.t / .22; { const sw = Math.min(1, k * 1.4); f.piv.rotation.y = f.v ? Math.PI / 3 - 2 * Math.PI / 3 * sw : -Math.PI / 3 + 2 * Math.PI / 3 * sw } f.arc.material.opacity = .9 * Math.max(0, 1 - k); f.fan.material.opacity = .2 * Math.max(0, 1 - k);
-        if (k >= 1) { S.remove(f.g);[f.fan, f.arc].forEach(m => { m.geometry.dispose(); m.material.dispose() }); slashes.splice(i, 1) }
+        const f = slashes[i]; f.t += dt; const k = f.t / .5; { const sw = Math.min(1, k * 1.4); f.piv.rotation.y = f.v ? Math.PI / 3 - 2 * Math.PI / 3 * sw : -Math.PI / 3 + 2 * Math.PI / 3 * sw } f.arc.material.opacity = .9 * Math.max(0, 1 - k); f.fan.material.opacity = .2 * Math.max(0, 1 - k); f.line.material.opacity = Math.max(0, 1 - k);
+        if (k >= 1) { S.remove(f.g); [f.fan, f.arc, f.line].forEach(m => { S.remove(m); m.geometry.dispose(); m.material.dispose() }); slashes.splice(i, 1) }
       }
       // orb
       orb.rotation.y += dt; orb.position.y = 1.2 + Math.sin(performance.now() / 400) * .15;
@@ -1323,6 +1772,10 @@
         if (rm) { S.remove(p.m); eProj.splice(i, 1) }
       }
       if (W.parryFrames > 0) W.parryFrames--;
+      if (W.perfectRiposteFrames > 0) {
+        if (W.perfectRiposteFresh) W.perfectRiposteFresh = false;
+        else W.perfectRiposteFrames--
+      }
       hud()
     }
     function ring(el, p, C, col) { el.style.strokeDashoffset = C * (1 - Math.max(0, Math.min(1, p))); el.style.stroke = col }
@@ -1331,12 +1784,21 @@
       $('rr').style.display = rp >= 0 ? 'block' : 'none'; if (rp >= 0) ring($('rrp'), rp, 138.23, '#fff');
       $('rings').style.display = W.cur == 1 ? 'flex' : 'none';
       if (W.cur == 1) {
-        const parry = WEAPON_ALTERNATES.sword == 'perfectParry', bc = W.blockCD > 0, wc = W.waveCD > 0;
-        $('rings').children[0].querySelector('span').textContent = parry ? 'PARRY' : 'GUARD';
-        ring($('rb'), parry ? 1 - W.parryCD / 15 : bc ? 1 - W.blockCD / 8 : 1, 163.36, parry ? W.parryFrames ? '#fd0' : W.parryCD > 0 ? '#c44' : '#4cf' : bc ? '#c44' : '#4cf');
-        ring($('rw'), wc ? 1 - W.waveCD : 1, 163.36, wc ? '#c44' : '#fd0');
-        $('rbt').textContent = parry ? W.parryFrames ? String(W.parryFrames) : W.parryCD > 0 ? W.parryCD.toFixed(1) : '\u2713' : bc ? W.blockCD.toFixed(1) : '\u2713';
-        $('rwt').textContent = wc ? W.waveCD.toFixed(1) : W.parryWaveReady ? 'READY' : '\u2713'
+        const duelist = WEAPON_SELECTIONS.sword == 'duelist';
+        const blockCooldown = W.blockCD > 0, waveCooldown = W.waveCD > 0;
+        $('rings').children[0].querySelector('span').textContent = duelist ? 'PARRY' : 'GUARD';
+        $('rings').children[1].querySelector('span').textContent = duelist ? 'RIPOSTE' : 'WAVE';
+        ring($('rb'), duelist
+          ? W.parryFrames ? W.parryFrames / SWORD_BALANCE.duelist.parryFrames : W.parryCD > 0 ? 1 - W.parryCD / SWORD_BALANCE.duelist.parryCooldown : 1
+          : blockCooldown ? 1 - W.blockCD / SWORD_BALANCE.defensive.guardCooldown : W.blockHP / SWORD_BALANCE.defensive.guardCapacity,
+        163.36, duelist ? W.parryFrames ? '#fd0' : W.parryCD > 0 ? '#c44' : '#4cf' : blockCooldown ? '#c44' : W.blocking ? '#4cf' : '#8ac');
+        ring($('rw'), duelist ? W.riposteReady ? 1 : 0 : waveCooldown ? 1 - W.waveCD / SWORD_BALANCE.defensive.waveCooldown : 1,
+          163.36, duelist ? W.perfectRiposteFrames > 0 ? '#f8f' : W.riposteReady ? '#fd0' : '#777' : waveCooldown ? '#c44' : '#fd0');
+        $('rbt').textContent = duelist ? W.parryFrames ? String(W.parryFrames) : W.parryCD > 0 ? W.parryCD.toFixed(1) : '\u2713'
+          : blockCooldown ? W.blockCD.toFixed(1) : W.guardStartup > 0 ? '...'
+            : Math.ceil(W.blockHP) + '/' + SWORD_BALANCE.defensive.guardCapacity;
+        $('rwt').textContent = duelist ? W.riposteReady ? W.perfectRiposteFrames > 0 ? 'PERF' : 'READY' : '\u2014'
+          : waveCooldown ? W.waveCD.toFixed(1) : '\u2713'
       }
     }
     function hudBoss() {
@@ -1344,9 +1806,16 @@
       $('bi').style.width = bo.hp / bo.max * 100 + '%'; $('bt').textContent = Math.ceil(bo.hp) + ' / ' + bo.max
     }
     function hud() {
-      hudRings(); hudBoss(); const pf = W.cur == 1 && W.charging && W.chargeT >= 3 && W.chargeT <= 3.2; $('star').style.display = pf ? 'block' : 'none'; const sOn = W.cur == 2 && W.scope; $('scope').style.display = sOn ? 'block' : 'none'; $('cross').style.display = sOn ? 'none' : 'block';
+      hudRings(); hudBoss();
+      const pf = W.cur == 1 && ((WEAPON_SELECTIONS.sword == 'defensive' && W.charging && W.chargeT >= SWORD_BALANCE.defensive.wavePerfectStart && W.chargeT <= SWORD_BALANCE.defensive.wavePerfectEnd) || W.perfectWaveCue > 0);
+      $('star').style.display = pf ? 'block' : 'none'; const sOn = W.cur == 2 && W.scope; $('scope').style.display = sOn ? 'block' : 'none'; $('cross').style.display = sOn ? 'none' : 'block';
       if (sOn) { const i = $('sg').firstChild; i.style.width = W.scopeCharge / 2 * 100 + '%'; i.style.background = W.scopeCharge >= 2 ? '#fd0' : '#8cf' }
       $('hp').firstChild.style.width = P.hp / 2 + '%'; $('hp').lastChild.textContent = 'HP ' + Math.ceil(P.hp) + ' / 200';
+      const stamina = $('stamina'), duelist = W.cur == 1 && WEAPON_SELECTIONS.sword == 'duelist';
+      stamina.style.display = duelist ? 'block' : 'none';
+      stamina.children[0].style.width = P.stamina / SWORD_BALANCE.duelist.maxStamina * 100 + '%';
+      stamina.children[1].textContent = P.stamina + ' / ' + SWORD_BALANCE.duelist.maxStamina
+        + (P.stamina >= SWORD_BALANCE.duelist.maxStamina ? ' · DOUBLE RIPOSTE' : ' STAMINA');
       const ds = $('dash').children; for (let i = 0; i < 3; i++)ds[i].firstChild.style.width = (i < P.dash ? 100 : i == P.dash ? P.dashTimer / 2.5 * 100 : 0) + '%';
       const cb = $('cb'), bi = cb.firstChild, bs = cb.lastChild; let show = false;
       if (W.cur == 0) {
@@ -1370,27 +1839,62 @@
         if (W.rReload > 0) $('wm').textContent += ' · reloading'
       }
       else {
-        const parry = WEAPON_ALTERNATES.sword == 'perfectParry';
-        $('wn').textContent = 'Sword';
-        $('wm').textContent = (parry ? 'Perfect Parry · RMB · ' + (W.parryWaveReady ? 'instant wave ready' : W.parryFrames ? W.parryFrames + ' frames' : W.parryCD > 0 ? W.parryCD.toFixed(1) + 's cooldown' : 'ready') : 'Guard · hold RMB') + ' · click: slash · hold: wave'
+        const defensive = WEAPON_SELECTIONS.sword == 'defensive';
+        $('wn').textContent = 'Sword · ' + (defensive ? 'Defensive' : 'Precision Duelist');
+        $('wm').textContent = defensive
+          ? 'Battle Hardened · click: cross slash · hold: wave · RMB: guard'
+          : 'Footwork +10% · click: rapier thrust · hold: lunge · RMB: parry';
+        if (defensive && W.guardBonus > 0) $('wm').textContent += ' · retaliation +' + W.guardBonus.toFixed(1)
+          + (W.guardBonusT > 0 ? ' (' + W.guardBonusT.toFixed(1) + 's)' : ' stored');
+        if (!defensive) {
+          if (P.stamina >= SWORD_BALANCE.duelist.maxStamina) $('wm').textContent += ' · DOUBLE RIPOSTE';
+          if (W.riposteReady) $('wm').textContent += W.perfectRiposteFrames > 0 ? ' · PERFECT RIPOSTE READY' : ' · RIPOSTE READY'
+        }
       }
       if (W.cur == 1) {
-        if (W.charging) { show = true; const c = W.chargeT; bi.style.width = Math.min(c / 3, 1) * 100 + '%'; const perf = c >= 3 && c <= 3.2; bi.style.background = perf ? '#fd0' : '#ddd'; bs.textContent = c < 3 ? 'Charging wave...' : perf ? 'PERFECT - release now!' : 'Fully charged - release' }
-        else if (WEAPON_ALTERNATES.sword == 'perfectParry') {
-          show = true; bi.style.width = W.parryFrames ? W.parryFrames / 5 * 100 : W.parryCD > 0 ? (1 - W.parryCD / 15) * 100 : 100;
+        show = true;
+        if (W.charging) {
+          const limit = duelist ? SWORD_BALANCE.duelist.lungeMaxCharge : SWORD_BALANCE.defensive.chargeMax;
+          const charge = W.chargeT, perfect = !duelist && charge >= SWORD_BALANCE.defensive.wavePerfectStart && charge <= SWORD_BALANCE.defensive.wavePerfectEnd;
+          bi.style.width = Math.min(charge / limit, 1) * 100 + '%';
+          bi.style.background = perfect ? '#fd0' : duelist ? '#c9f' : '#ddd';
+          bs.textContent = duelist ? charge >= limit ? 'MAX LUNGE · release!' : 'Charging lunge...' : perfect ? 'PERFECT WAVE · release now!' : charge < SWORD_BALANCE.defensive.waveChargeMin ? 'Charging wave...' : 'Charged · release';
+        } else if (duelist) {
+          bi.style.width = W.parryFrames ? W.parryFrames / SWORD_BALANCE.duelist.parryFrames * 100
+            : W.parryCD > 0 ? (1 - W.parryCD / SWORD_BALANCE.duelist.parryCooldown) * 100 : 100;
           bi.style.background = W.parryFrames ? '#fd0' : W.parryCD > 0 ? '#a33' : '#4cf';
-          bs.textContent = W.parryWaveReady ? 'Perfect parry! Next attack sends an instant wave' : W.parryFrames ? 'Parry window: ' + W.parryFrames + ' frames' : W.parryCD > 0 ? 'Perfect Parry cooldown ' + W.parryCD.toFixed(1) + 's' : 'Perfect Parry ready · press RMB'
-        }
-        else if (W.waveCD > 0 && W.down) { show = true; bi.style.width = (1 - W.waveCD) * 100 + '%'; bi.style.background = '#a33'; bs.textContent = 'Wave cooldown ' + W.waveCD.toFixed(1) + 's' }
-        else {
-          show = true; if (W.blockCD > 0) { bi.style.width = (1 - W.blockCD / 8) * 100 + '%'; bi.style.background = '#a33'; bs.textContent = 'Guard cooldown ' + W.blockCD.toFixed(1) + 's' }
-          else { bi.style.width = W.blockHP / 40 * 100 + '%'; bi.style.background = W.blocking ? '#4cf' : '#8ac'; bs.textContent = 'Guard ' + Math.ceil(W.blockHP) + '/40' + (W.blocking ? ' (active)' : '') }
+          bs.textContent = W.riposteReady
+            ? W.perfectRiposteFrames > 0 ? 'Perfect Riposte window · attack now!' : 'Riposte ready · next attack consumes it'
+            : W.parryFrames ? 'Perfect parry window · ' + W.parryFrames + ' frames'
+              : W.parryCD > 0 ? 'Parry cooldown ' + W.parryCD.toFixed(1) + 's' : 'Parry ready · hold RMB';
+        } else if (W.blockCD > 0) {
+          bi.style.width = (1 - W.blockCD / SWORD_BALANCE.defensive.guardCooldown) * 100 + '%';
+          bi.style.background = '#a33'; bs.textContent = 'Guard break · ' + W.blockCD.toFixed(1) + 's cooldown';
+        } else if (W.guardStartup > 0) {
+          bi.style.width = (1 - W.guardStartup / SWORD_BALANCE.defensive.guardStartup) * 100 + '%';
+          bi.style.background = '#fd0'; bs.textContent = 'Guard startup...';
+        } else {
+          bi.style.width = W.blockHP / SWORD_BALANCE.defensive.guardCapacity * 100 + '%';
+          bi.style.background = W.blocking ? '#4cf' : '#8ac';
+          bs.textContent = 'Guard ' + Math.ceil(W.blockHP) + '/' + SWORD_BALANCE.defensive.guardCapacity + (W.blocking ? ' (active)' : '');
         }
       }
       cb.style.display = show ? 'block' : 'none'
     }
-    let bobT = 0, bobA = 0; let last = performance.now();
-    (function loop(t) { const dt = Math.min((t - last) / 1000, .05); last = t; if (locked) update(dt); R.render(S, cam); requestAnimationFrame(loop) })(last);
+    let bobT = 0, bobA = 0, accumulator = 0; let last = performance.now();
+    const SIMULATION_STEP = 1 / 60;
+    (function loop(t) {
+      const frameDt = Math.min((t - last) / 1000, .05);
+      last = t;
+      if (locked) {
+        accumulator += frameDt;
+        while (accumulator >= SIMULATION_STEP) {
+          update(SIMULATION_STEP);
+          accumulator -= SIMULATION_STEP
+        }
+      } else accumulator = 0;
+      R.render(S, cam); requestAnimationFrame(loop)
+    })(last);
     hud();
   </script>
 </body>
